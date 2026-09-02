@@ -1,0 +1,100 @@
+"""Live, iteration-by-iteration visualization for the PUND rise-shape BO experiment."""
+
+import numpy as np
+
+
+class ControlPanel:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.enabled = cfg.enable_control_panel
+        self.works = []
+        self.deltas_p = []
+        self.feasible = []
+        if not self.enabled:
+            return
+        import matplotlib.pyplot as plt
+
+        self.plt = plt
+        plt.ion()
+        self.figure, axes = plt.subplots(2, 2, figsize=(13, 8))
+        self.ax_voltage, self.ax_current, self.ax_next, self.ax_history = axes.ravel()
+        self.ax_charge = self.ax_history.twinx()
+        self.figure.canvas.manager.set_window_title("PUND Rise-Shape Bayesian Optimization")
+        self.figure.tight_layout(pad=3.0)
+
+    def show_next(self, control_voltages_v, status="Waiting for measurement"):
+        if not self.enabled:
+            return
+        duration = self.cfg.waveform.rise_time_s
+        control_t = np.linspace(0.0, duration, len(control_voltages_v))
+        dense_t = np.linspace(0.0, duration, 1000)
+        dense_v = np.interp(dense_t, control_t, control_voltages_v)
+        self.ax_next.clear()
+        self.ax_next.plot(dense_t * 1e6, dense_v, color="tab:orange", linewidth=2)
+        self.ax_next.scatter(control_t * 1e6, control_voltages_v, color="tab:red", zorder=3)
+        self.ax_next.set(title="Next BO rise choice", xlabel="Rise time (us)", ylabel="Voltage (V)")
+        self.ax_next.set_xlim(0.0, duration * 1e6)
+        self.ax_next.grid(True, alpha=0.3)
+        self.figure.suptitle(status)
+        self._refresh()
+
+    def _refresh(self):
+        self.figure.tight_layout(pad=3.0)
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+        self.plt.pause(0.05)
+
+    def update(self, measurement, result, next_voltages_v, iteration):
+        if not self.enabled:
+            return
+        self.ax_voltage.clear()
+        self.ax_voltage.plot(measurement.rise_time_s * 1e6, measurement.rise_voltage_v, color="tab:blue")
+        self.ax_voltage.set(title="Measured voltage (rise window)", xlabel="Rise time (us)", ylabel="Voltage (V)")
+        self.ax_voltage.grid(True, alpha=0.3)
+
+        self.ax_current.clear()
+        self.ax_current.plot(measurement.rise_time_s * 1e6, measurement.rise_current_diff_a,
+                             color="tab:green", label="Subtracted current I1-I2")
+        self.ax_current.set(title="Subtracted current (rise window)", xlabel="Rise time (us)", ylabel="Current (A)")
+        self.ax_current.grid(True, alpha=0.3)
+        self.ax_current.legend(loc="best")
+
+        self.works.append(float(result["Work"]))
+        self.deltas_p.append(float(result["delta_P"]))
+        self.feasible.append(bool(result["feasible"]))
+        self.ax_history.clear()
+        self.ax_charge.clear()
+        self.ax_history.yaxis.set_label_position("left")
+        self.ax_history.yaxis.tick_left()
+        self.ax_history.spines["left"].set_position(("axes", 0.0))
+        self.ax_charge.yaxis.set_label_position("right")
+        self.ax_charge.yaxis.tick_right()
+        self.ax_charge.spines["right"].set_position(("axes", 1.0))
+        indices = np.arange(len(self.works))
+        colors = ["tab:green" if value else "tab:red" for value in self.feasible]
+        self.ax_history.plot(indices, self.works, color="0.5", linewidth=1)
+        self.ax_history.scatter(indices, self.works, c=colors, s=24)
+        self.ax_history.set(title="Work history (green = polarization feasible)",
+                            xlabel="Evaluation", ylabel="Work = Integral V*I_diff dt (J)")
+        self.ax_history.tick_params(axis="y", colors="0.25")
+        self.ax_history.grid(True, alpha=0.3)
+        self.ax_charge.plot(indices, self.deltas_p, color="tab:purple", marker="o",
+                            markersize=3, label="Measured delta_P")
+        self.ax_charge.axhline(float(result["P_target"]), color="tab:red",
+                               linestyle="--", label="Target delta_P")
+        self.ax_charge.set_ylabel("delta_P (C/m^2)", color="tab:purple")
+        self.ax_charge.tick_params(axis="y", colors="tab:purple")
+        self.ax_charge.legend(loc="upper right")
+
+        status = (f"Evaluation {iteration} | {result['phase']} | "
+                  f"delta_P={result['delta_P']:.4g} C/m^2 | target={result['P_target']:.4g} C/m^2 | "
+                  f"feasible={result['feasible']}")
+        self.show_next(next_voltages_v, status)
+
+    def finish(self):
+        if not self.enabled:
+            return
+        self.figure.suptitle("Experiment complete - close this window to exit")
+        self._refresh()
+        self.plt.ioff()
+        self.plt.show()

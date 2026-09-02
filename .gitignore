@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments and editors
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Experiment outputs
+data/
+BO_pund_rise_*/
+bo_history_*.csv
+trace_*.csv
+rise_*.csv
+run_config_*.json
+*.mp4
+*.gif
+
+# Generated plots
+*_traces.png
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
