@@ -66,7 +66,7 @@ class PUNDWaveformConfig:
     linear_minimum_voltage_v: float = 0.0
     linear_maximum_voltage_v: float = 0.8
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 1  # BO upper bound
+    maximum_voltage_v: float = 1.0  # BO upper bound
     safety_max_voltage_v: float = 1.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
@@ -92,8 +92,8 @@ class BOConfig:
     # dimensionality of the BO search space (both positive pulses reuse the
     # same rise_points-length control vector -- see waveform.build_shaped_rise).
     rise_points: int = 10
-    initial_random_measurements: int = 100
-    bo_steps: int = 300
+    initial_random_measurements: int =50
+    bo_steps: int = 150
     # Shifts the BO feasibility boundary relative to P_TARGET (the first,
     # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
     # negative LOOSENS the bound (delta_P may fall below P_TARGET by that
@@ -125,7 +125,7 @@ class ExperimentConfig:
     run_timestamp: str = field(
         default_factory=lambda: dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     )
-    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260824")
+    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260906")
     # Number of full AWG-buffer repeats to capture in one digitize call and
     # average over in pulse_subtraction.subtract_pund_pulses.
     scope_capture_periods: int = 1

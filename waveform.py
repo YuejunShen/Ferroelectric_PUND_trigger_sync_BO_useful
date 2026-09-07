@@ -137,11 +137,14 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
 
 
 def normalize_for_generator(voltage_v: np.ndarray) -> tuple[np.ndarray, float, float]:
-    """Return normalized samples, Vpp, and offset without changing physical voltage."""
-    low, high = float(np.min(voltage_v)), float(np.max(voltage_v))
+    """Encode physical volts using the waveform's required Vpp and offset."""
+    samples = np.asarray(voltage_v, dtype=float)
+    if not np.all(np.isfinite(samples)):
+        raise ValueError("Waveform voltages must be finite")
+    low, high = float(np.min(samples)), float(np.max(samples))
     if np.isclose(low, high):
-        return np.zeros_like(voltage_v), 0.02, low
+        return np.zeros_like(samples), 0.02, low
     vpp = high - low
     offset = (high + low) / 2.0
-    normalized = 2.0 * (voltage_v - low) / vpp - 1.0
+    normalized = 2.0 * (samples - low) / vpp - 1.0
     return normalized, vpp, offset

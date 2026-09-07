@@ -24,6 +24,9 @@ class ArbGenerator:
         self.cfg = cfg
 
     def upload(self, waveform: ArbWaveform) -> None:
+        # Vpp and offset follow the complete waveform range. The plateau samples
+        # are transformed by the same affine mapping, so they still decode to
+        # reset_voltage_v and -reset_voltage_v for every BO rise protocol.
         normalized, vpp, offset = normalize_for_generator(waveform.voltage_v)
         rm = _resource_manager()
         fg = rm.open_resource(self.cfg.instruments.function_generator_address)
@@ -37,8 +40,10 @@ class ArbGenerator:
             fg.write("FUNC USER")
             fg.write("OUTP:SYNC ON")
             fg.write(f"FREQ {1.0 / waveform.duration_s:.12g}")
+            fg.write("VOLT:UNIT VPP")
             fg.write(f"VOLT {vpp:.12g}")
             fg.write(f"VOLT:OFFS {offset:.12g}")
+            fg.query("*OPC?")
         finally:
             fg.close()
             # ResourceManager instances may share one VISA session. Closing it
