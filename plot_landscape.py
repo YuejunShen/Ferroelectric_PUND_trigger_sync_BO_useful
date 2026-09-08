@@ -60,7 +60,30 @@ def principal_eigenmodes(history: pd.DataFrame, columns: list[str]):
     variance = singular_values ** 2
     explained = variance / variance.sum()
     scores = centered @ eigenvectors[:2].T
-    return scores[:, 0], scores[:, 1], explained[:2]
+    # eigenvectors[:2] rows are PC1/PC2 themselves, e.g. eigenvectors[0][i] is
+    # how much V<columns[i]> contributes to eigenmode 1 (its "loading").
+    return scores[:, 0], scores[:, 1], explained[:2], eigenvectors[:2]
+
+
+def plot_eigenvector_loadings(columns: list[str], eigenvectors: np.ndarray, explained: np.ndarray,
+                               output_path: Path) -> Path:
+    """Bar chart of each eigenmode's loading on every V0..Vn knot -- i.e. what
+    PC1/PC2 in the landscape plot actually *are*, in terms of the real inputs."""
+    figure, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+    x = np.arange(len(columns))
+    for axis, loadings, label, variance in zip(axes, eigenvectors, ("Eigenmode 1 (PC1)", "Eigenmode 2 (PC2)"), explained):
+        colors = ["tab:blue" if value >= 0 else "tab:red" for value in loadings]
+        axis.bar(x, loadings, color=colors)
+        axis.axhline(0.0, color="0.3", linewidth=0.8)
+        axis.set_xticks(x, columns, rotation=45, ha="right")
+        axis.set(title=f"{label} ({variance:.1%} explained)", xlabel="voltage knot")
+        axis.grid(True, alpha=0.3, axis="y")
+    axes[0].set_ylabel("loading (eigenvector component)")
+    figure.suptitle("What each eigenmode is made of")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output_path
 
 
 def _scatter_landscape(axis, x, y, values, label, feasible=None):
@@ -80,6 +103,20 @@ def _scatter_landscape(axis, x, y, values, label, feasible=None):
     return axis
 
 
+def _add_eigenvector_table(axis, columns: list[str], eigenvectors: np.ndarray):
+    """Render the two eigenvectors' components (one row per V0..Vn knot) as a
+    table filling the given (axis-off) axis -- what PC1/PC2 in the landscape
+    scatters actually *are*, in terms of the real inputs, read as exact numbers."""
+    axis.axis("off")
+    cell_text = [[f"{eigenvectors[0, i]:+.3f}", f"{eigenvectors[1, i]:+.3f}"] for i in range(len(columns))]
+    table = axis.table(cellText=cell_text, rowLabels=columns, colLabels=["PC1", "PC2"],
+                       cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.0, 1.4)
+    axis.set_title("Eigenvector\nloadings", fontsize=10)
+
+
 def plot_landscape(history_path: Path, output_dir: Path | None = None) -> Path:
     history = pd.read_csv(history_path).sort_values("evaluation").reset_index(drop=True)
     if history.empty:
@@ -89,17 +126,19 @@ def plot_landscape(history_path: Path, output_dir: Path | None = None) -> Path:
             raise ValueError(f"History is missing '{required}' column")
 
     columns = voltage_knot_columns(history)
-    pc1, pc2, explained = principal_eigenmodes(history, columns)
+    pc1, pc2, explained, eigenvectors = principal_eigenmodes(history, columns)
     feasible = history["feasible"].to_numpy(bool) if "feasible" in history else None
 
     output_dir = output_dir or history_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    figure, (ax_work, ax_dp) = plt.subplots(1, 2, figsize=(13, 5.5))
+    figure, (ax_work, ax_dp, ax_table) = plt.subplots(
+        1, 3, figsize=(15, 5.5), gridspec_kw={"width_ratios": [5, 5, 2]})
     _scatter_landscape(ax_work, pc1, pc2, history["Work"].to_numpy(float), "Work (J)", feasible)
     ax_work.set_title("Work landscape")
     _scatter_landscape(ax_dp, pc1, pc2, history["delta_P"].to_numpy(float), "delta_P (C/m^2)", feasible)
     ax_dp.set_title("delta_P landscape")
+    _add_eigenvector_table(ax_table, columns, eigenvectors)
 
     figure.suptitle(
         f"BO landscape over top-2 eigenmodes of {columns[0]}..{columns[-1]} "
@@ -112,6 +151,13 @@ def plot_landscape(history_path: Path, output_dir: Path | None = None) -> Path:
     output_path = output_dir / f"{history_path.stem}_landscape.png"
     figure.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
+
+    loadings_path = plot_eigenvector_loadings(
+        columns, eigenvectors, explained, output_dir / f"{history_path.stem}_eigenvectors.png")
+    pd.DataFrame(eigenvectors.T, index=columns, columns=["PC1_loading", "PC2_loading"]).to_csv(
+        output_dir / f"{history_path.stem}_eigenvectors.csv", index_label="knot")
+    print(f"Saved {loadings_path}")
+
     return output_path
 
 

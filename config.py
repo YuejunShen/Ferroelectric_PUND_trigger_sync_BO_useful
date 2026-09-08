@@ -93,7 +93,7 @@ class BOConfig:
     # same rise_points-length control vector -- see waveform.build_shaped_rise).
     rise_points: int = 10
     initial_random_measurements: int =20
-    bo_steps: int = 300
+    bo_steps: int = 150
     # Shifts the BO feasibility boundary relative to P_TARGET (the first,
     # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
     # negative LOOSENS the bound (delta_P may fall below P_TARGET by that
@@ -138,18 +138,24 @@ class ExperimentConfig:
     run_timestamp: str = field(
         default_factory=lambda: dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     )
-    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260907")
+    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260908")
     # Number of full AWG-buffer repeats to capture in one digitize call and
     # average over in pulse_subtraction.subtract_pund_pulses.
     scope_capture_periods: int = 1
     output_on_wait_s: float = 1.0
     enable_control_panel: bool = True
+    # Human-readable tag describing which swept parameter values this run
+    # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each
+    # run's output folder self-documents its settings. Empty for a normal,
+    # non-swept run (folder naming is unchanged in that case).
+    sweep_tag: str = ""
 
     @property
     def output_directory(self) -> Path:
         # HHMM from run_timestamp so repeat runs (same device, same day) get their own folder.
         time_of_day = self.run_timestamp.split("_")[1][:4]
-        return self.data_mother_path / f"BO_pund_rise_{self.device.device_name}_{time_of_day}"
+        suffix = f"_{self.sweep_tag}" if self.sweep_tag else ""
+        return self.data_mother_path / f"BO_pund_rise_{self.device.device_name}_{time_of_day}{suffix}"
 
     @property
     def history_file(self) -> Path:

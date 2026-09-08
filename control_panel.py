@@ -91,10 +91,16 @@ class ControlPanel:
                   f"feasible={result['feasible']}")
         self.show_next(next_voltages_v, status)
 
-    def finish(self):
+    def finish(self, block: bool = True):
+        """block=False closes the window immediately instead of waiting for the
+        user -- used by run_parameter_sweep.py so a multi-run sweep proceeds
+        unattended instead of stalling on every run's plot window."""
         if not self.enabled:
             return
         self.figure.suptitle("Experiment complete - close this window to exit")
         self._refresh()
         self.plt.ioff()
-        self.plt.show()
+        if block:
+            self.plt.show()
+        else:
+            self.plt.close(self.figure)
