@@ -67,7 +67,7 @@ class PUNDWaveformConfig:
     linear_maximum_voltage_v: float = 0.8
     minimum_voltage_v: float = 0  # BO lower bound
     maximum_voltage_v: float = 1.0  # BO upper bound
-    safety_max_voltage_v: float = 1.0  # hard ceiling, independent of the BO search bounds
+    safety_max_voltage_v: float = 1.2  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
     def __post_init__(self):
@@ -92,8 +92,8 @@ class BOConfig:
     # dimensionality of the BO search space (both positive pulses reuse the
     # same rise_points-length control vector -- see waveform.build_shaped_rise).
     rise_points: int = 10
-    initial_random_measurements: int =50
-    bo_steps: int = 150
+    initial_random_measurements: int =20
+    bo_steps: int = 300
     # Shifts the BO feasibility boundary relative to P_TARGET (the first,
     # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
     # negative LOOSENS the bound (delta_P may fall below P_TARGET by that
@@ -106,10 +106,23 @@ class BOConfig:
     max_iter: int = 100
     # None avoids Botorch's Windows threadpoolctl timeout wrapper.
     max_time_s: float | None = None
+    # "optimize" (default): constrained Expected Improvement, as before --
+    # minimizes Work_NORM subject to the P_lower_NORM feasibility constraint.
+    # "explore": unconstrained Bayesian exploration (BayesianExplorationGenerator).
+    # The P_lower_NORM constraint is dropped entirely and Work_NORM/delta_P_NORM
+    # stop being an objective/observable pair to optimize -- both become equal-
+    # standing EXPLORE targets, and the generator proposes whichever untried
+    # protocol the joint GP over (Work_NORM, delta_P_NORM) is currently least
+    # certain about. The goal isn't a minimum, it's mapping which protocols
+    # (V0..Vn) produce which combinations of Work and delta_P -- feed the
+    # resulting bo_history_*.csv to plot_landscape.py to see that map.
+    mode: str = "optimize"
 
     def __post_init__(self):
         if self.rise_points < 2:
             raise ValueError("rise_points must be at least 2")
+        if self.mode not in ("optimize", "explore"):
+            raise ValueError(f"mode must be 'optimize' or 'explore', got {self.mode!r}")
 
     @property
     def total_measurements(self) -> int:
@@ -125,7 +138,7 @@ class ExperimentConfig:
     run_timestamp: str = field(
         default_factory=lambda: dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     )
-    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260906")
+    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260907")
     # Number of full AWG-buffer repeats to capture in one digitize call and
     # average over in pulse_subtraction.subtract_pund_pulses.
     scope_capture_periods: int = 1

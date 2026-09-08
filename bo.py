@@ -13,11 +13,12 @@ from config import BOConfig, PUNDWaveformConfig
 
 try:
     import xopt
-    from xopt.generators.bayesian import ExpectedImprovementGenerator
+    from xopt.generators.bayesian import ExpectedImprovementGenerator, BayesianExplorationGenerator
     from xopt.vocs import VOCS
 except ImportError:
     xopt = None
     ExpectedImprovementGenerator = None
+    BayesianExplorationGenerator = None
     VOCS = None
 
 
@@ -52,15 +53,28 @@ class BayesianRiseOptimizer:
         self._rng = np.random.default_rng(self.bo_cfg.random_seed)
 
     def _make_generator(self):
-        self.vocs = VOCS(
-            variables={name: [self.waveform_cfg.minimum_voltage_v,
-                              self.waveform_cfg.maximum_voltage_v]
-                       for name in self.input_names},
-            objectives={"Work_NORM": "MINIMIZE"},
-            constraints={"P_lower_NORM": ["GREATER_THAN", self.p_lower_norm_threshold]},
-            observables=["Work", "delta_P", "delta_P_NORM", "P_violation"],
-        )
-        generator = ExpectedImprovementGenerator(vocs=self.vocs)
+        variables = {name: [self.waveform_cfg.minimum_voltage_v,
+                            self.waveform_cfg.maximum_voltage_v]
+                     for name in self.input_names}
+        if self.bo_cfg.mode == "explore":
+            # No feasibility constraint and no single objective to minimize --
+            # Work_NORM and delta_P_NORM are equal-standing EXPLORE targets,
+            # so the generator chases whichever untried protocol the joint GP
+            # is currently most uncertain about, across both outputs at once.
+            self.vocs = VOCS(
+                variables=variables,
+                objectives={"Work_NORM": "EXPLORE", "delta_P_NORM": "EXPLORE"},
+                observables=["Work", "delta_P", "P_violation"],
+            )
+            generator = BayesianExplorationGenerator(vocs=self.vocs)
+        else:
+            self.vocs = VOCS(
+                variables=variables,
+                objectives={"Work_NORM": "MINIMIZE"},
+                constraints={"P_lower_NORM": ["GREATER_THAN", self.p_lower_norm_threshold]},
+                observables=["Work", "delta_P", "delta_P_NORM", "P_violation"],
+            )
+            generator = ExpectedImprovementGenerator(vocs=self.vocs)
         generator.gp_constructor.use_low_noise_prior = True
         generator.numerical_optimizer.n_restarts = self.bo_cfg.n_restarts
         generator.numerical_optimizer.max_iter = self.bo_cfg.max_iter

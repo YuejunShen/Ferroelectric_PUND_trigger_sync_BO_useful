@@ -7,6 +7,7 @@ from config import ExperimentConfig
 from control_panel import ControlPanel
 from make_evolution_video import default_output_path, make_video
 from measurement import apply_rise_and_measure
+from plot_landscape import plot_landscape
 from storage import save_measurement, save_run_config
 
 
@@ -40,6 +41,12 @@ def main() -> None:
         print(f"Evolution video saved to {video_path}")
     except Exception as exc:
         print(f"Could not generate evolution video: {exc}")
+
+    try:
+        landscape_path = plot_landscape(cfg.history_file)
+        print(f"Landscape plot saved to {landscape_path}")
+    except Exception as exc:
+        print(f"Could not generate landscape plot: {exc}")
 
     panel.finish()
 
