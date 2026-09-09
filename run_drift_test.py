@@ -19,10 +19,11 @@ import time
 import numpy as np
 
 from config import ExperimentConfig
+from instruments import ArbGenerator
 from measurement import apply_rise_and_measure
 
 # Measurements taken back-to-back within one batch.
-MEASUREMENTS_PER_BATCH: int = 200
+MEASUREMENTS_PER_BATCH: int = 100
 # Pause between consecutive measurements within a batch, in seconds.
 INTRA_BATCH_DELAY_S: float = 2.0
 # Rest between batches, in seconds (e.g. to see recovery after stress). This is
@@ -30,7 +31,7 @@ INTRA_BATCH_DELAY_S: float = 2.0
 # batch (1.0 = constant rest, as before; e.g. 2.0 doubles it every batch:
 # 60s, 120s, 240s, ...), capped at REST_MAX_S (None = uncapped).
 INITIAL_REST_S: float = 10
-REST_GROWTH_FACTOR: float = 2
+REST_GROWTH_FACTOR: float = 4
 REST_MAX_S: float | None = None
 # Number of batches to run. None runs batches until interrupted (Ctrl+C).
 NUM_BATCHES: int | None = 5
@@ -65,12 +66,27 @@ def main() -> None:
           + (f", capped at {REST_MAX_S}s" if REST_MAX_S is not None else "") + ").")
     print(f"Logging to {log_path}")
 
+    stop_requested = [False]
+
     figure = ax_work = ax_delta_p = plt = None
     if cfg.enable_control_panel:
         import matplotlib.pyplot as plt
+        from matplotlib.widgets import Button
+
         plt.ion()
         figure, (ax_work, ax_delta_p) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+        figure.subplots_adjust(bottom=0.18)
         figure.canvas.manager.set_window_title("Drift test")
+
+        def _on_stop_clicked(_event):
+            stop_requested[0] = True
+            stop_button.label.set_text("Stopping after this\nmeasurement...")
+            stop_button.ax.set_facecolor("0.8")
+            figure.canvas.draw_idle()
+
+        button_ax = figure.add_axes([0.35, 0.02, 0.3, 0.07])
+        stop_button = Button(button_ax, "Stop safely", color="tab:red", hovercolor="0.9")
+        stop_button.on_clicked(_on_stop_clicked)
 
     works, deltas_p, elapsed_s = [], [], []
     batch_start_times = []
@@ -104,10 +120,16 @@ def main() -> None:
         iteration = 0
         batch = 0
         try:
-            while NUM_BATCHES is None or batch < NUM_BATCHES:
+            while (NUM_BATCHES is None or batch < NUM_BATCHES) and not stop_requested[0]:
                 batch_start_times.append(time.monotonic() - start)
                 print(f"\n--- Batch {batch} ---")
                 for batch_iteration in range(MEASUREMENTS_PER_BATCH):
+                    # apply_rise_and_measure() owns the AWG/scope connections
+                    # for exactly this one measurement and always closes them
+                    # (its own try/finally) before returning -- so the stop
+                    # check below only ever fires between measurements, never
+                    # mid-measurement, and the instruments are always left in
+                    # a clean, reconnectable state.
                     measurement = apply_rise_and_measure(voltages, cfg)
                     now = time.monotonic() - start
                     print(f"[batch {batch}, {batch_iteration}] t={now:.1f}s "
@@ -124,20 +146,43 @@ def main() -> None:
                     refresh_plot()
 
                     iteration += 1
+                    if stop_requested[0]:
+                        print("Stop requested -- finishing cleanly after this measurement.")
+                        break
                     is_last_in_batch = batch_iteration == MEASUREMENTS_PER_BATCH - 1
                     if not is_last_in_batch and INTRA_BATCH_DELAY_S > 0:
                         time.sleep(INTRA_BATCH_DELAY_S)
+
+                if stop_requested[0]:
+                    break
 
                 rest_s = rest_duration_s(batch)
                 batch += 1
                 if (NUM_BATCHES is None or batch < NUM_BATCHES) and rest_s > 0:
                     print(f"Resting {rest_s:.1f}s before next batch...")
-                    time.sleep(rest_s)
+                    for _ in range(int(rest_s * 10)):
+                        if stop_requested[0]:
+                            break
+                        time.sleep(0.1)
+                        if plt is not None:
+                            plt.pause(0.001)
         except KeyboardInterrupt:
-            print("\nDrift test stopped by user.")
+            print("\nDrift test stopped by user (Ctrl+C).")
+
+    # Defensive final shutdown -- apply_rise_and_measure already closes its
+    # own AWG/scope sessions after every measurement, so this is normally a
+    # no-op, but it guarantees the AWG output is off before you walk away.
+    try:
+        ArbGenerator(cfg).output(False)
+    except Exception as exc:
+        print(f"Could not confirm AWG output is off: {exc}")
+    else:
+        print("AWG output confirmed off. Safe to start the next run.")
 
     if plt is not None:
         figure.suptitle("Drift test complete - close this window to exit")
+        stop_button.label.set_text("Stop safely")
+        stop_button.ax.set_facecolor("0.85")
         plt.ioff()
         plt.show()
 

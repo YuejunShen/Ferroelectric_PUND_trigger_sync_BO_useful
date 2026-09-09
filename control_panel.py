@@ -10,9 +10,15 @@ class ControlPanel:
         self.works = []
         self.deltas_p = []
         self.feasible = []
+        # Set when the user clicks "Stop safely" -- checked by run_experiment.py
+        # between iterations (never mid-measurement, since apply_rise_and_measure
+        # always closes its own AWG/scope sessions before returning), so the
+        # run always ends with the instruments in a clean, reconnectable state.
+        self.stop_requested = False
         if not self.enabled:
             return
         import matplotlib.pyplot as plt
+        from matplotlib.widgets import Button
 
         self.plt = plt
         plt.ion()
@@ -20,7 +26,18 @@ class ControlPanel:
         self.ax_voltage, self.ax_current, self.ax_next, self.ax_history = axes.ravel()
         self.ax_charge = self.ax_history.twinx()
         self.figure.canvas.manager.set_window_title("PUND Rise-Shape Bayesian Optimization")
-        self.figure.tight_layout(pad=3.0)
+        self.figure.subplots_adjust(bottom=0.12)
+        self.figure.tight_layout(pad=3.0, rect=(0.0, 0.08, 1.0, 1.0))
+
+        stop_ax = self.figure.add_axes([0.4, 0.01, 0.2, 0.05])
+        self.stop_button = Button(stop_ax, "Stop safely", color="tab:red", hovercolor="0.9")
+        self.stop_button.on_clicked(self._on_stop_clicked)
+
+    def _on_stop_clicked(self, _event):
+        self.stop_requested = True
+        self.stop_button.label.set_text("Stopping after this\nmeasurement...")
+        self.stop_button.ax.set_facecolor("0.8")
+        self.figure.canvas.draw_idle()
 
     def show_next(self, control_voltages_v, status="Waiting for measurement"):
         if not self.enabled:
@@ -98,6 +115,8 @@ class ControlPanel:
         if not self.enabled:
             return
         self.figure.suptitle("Experiment complete - close this window to exit")
+        self.stop_button.label.set_text("Stop safely")
+        self.stop_button.ax.set_facecolor("0.85")
         self._refresh()
         self.plt.ioff()
         if block:

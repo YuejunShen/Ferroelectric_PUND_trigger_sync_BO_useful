@@ -102,8 +102,12 @@ def main() -> None:
     print(f"Sweep: {total} run(s) total. Output folder: {SWEEP_FOLDER}")
     for index, (cfg, combo, repeat) in enumerate(build_configs(), start=1):
         print(f"\n=== Run {index}/{total}: {cfg.sweep_tag} ===")
-        run_once(cfg, sweep_label=cfg.sweep_tag, sweep_overrides=combo,
-                 repeat_index=repeat, block_on_finish=False)
+        stopped = run_once(cfg, sweep_label=cfg.sweep_tag, sweep_overrides=combo,
+                            repeat_index=repeat, block_on_finish=False)
+        if stopped:
+            print(f"\nStop requested during run {index}/{total} -- ending sweep "
+                  "early instead of starting the next run.")
+            break
 
     x_column = _default_x_column()
     if x_column is None:

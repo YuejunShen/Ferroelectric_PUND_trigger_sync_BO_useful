@@ -16,7 +16,11 @@ from storage import append_run_log, save_measurement, save_run_config
 
 
 def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict | None = None,
-             repeat_index: int | None = None, block_on_finish: bool = True) -> None:
+             repeat_index: int | None = None, block_on_finish: bool = True) -> bool:
+    """Returns True if the user clicked "Stop safely" on the control panel
+    during this run (checked between iterations, never mid-measurement) --
+    run_parameter_sweep.py uses this to stop the whole sweep rather than
+    launching another run."""
     save_run_config(cfg)
     append_run_log(cfg, sweep_label=sweep_label, sweep_overrides=sweep_overrides, repeat_index=repeat_index)
     optimizer = BayesianRiseOptimizer(cfg.waveform, cfg.bo)
@@ -40,6 +44,10 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
         proposed_voltage = optimizer.propose()
         panel.update(measurement, result, proposed_voltage, iteration)
 
+        if panel.stop_requested:
+            print(f"Stop requested -- finishing cleanly after iteration {iteration}.")
+            break
+
     try:
         video_path = make_video(cfg.history_file, default_output_path(cfg.history_file),
                                 cfg.device.electrode_area_m2, cfg.waveform)
@@ -54,6 +62,7 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
         print(f"Could not generate landscape plot: {exc}")
 
     panel.finish(block=block_on_finish)
+    return panel.stop_requested
 
 
 def main() -> None:
