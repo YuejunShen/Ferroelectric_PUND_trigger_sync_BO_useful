@@ -14,13 +14,16 @@ uses as its very first BO evaluation.
 import csv
 import dataclasses
 import datetime as dt
+import json
 import time
 
 import numpy as np
 
 from config import ExperimentConfig
 from instruments import ArbGenerator
-from measurement import apply_rise_and_measure
+from measurement import apply_rise_and_measure, Measurement
+from plot_drift_test import default_video_output_path, make_drift_video, plot_drift
+from storage import save_run_config
 
 # Measurements taken back-to-back within one batch.
 MEASUREMENTS_PER_BATCH: int = 100
@@ -34,7 +37,7 @@ INITIAL_REST_S: float = 10
 REST_GROWTH_FACTOR: float = 4
 REST_MAX_S: float | None = None
 # Number of batches to run. None runs batches until interrupted (Ctrl+C).
-NUM_BATCHES: int | None = 5
+NUM_BATCHES: int | None = 6
 DRIFT_NAME = "drift_test"
 
 
@@ -51,20 +54,63 @@ def linear_ramp(cfg: ExperimentConfig) -> np.ndarray:
                         cfg.bo.rise_points)
 
 
+def save_trace(measurement: Measurement, cfg: ExperimentConfig, batch: int, batch_iteration: int) -> None:
+    """Raw scope trace + rise-window trace for one measurement, same columns
+    as storage.save_measurement's per-iteration CSVs, so drift-test traces can
+    be inspected the same way as a normal BO run's."""
+    tag = f"{cfg.run_timestamp}_batch{batch:03d}_meas{batch_iteration:03d}"
+    trace_path = cfg.output_directory / f"trace_{tag}.csv"
+    with trace_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time_s", "current_a", "voltage_v", "voltage_measured_v", "voltage_resistor_v"])
+        writer.writerows(zip(measurement.time_s, measurement.current_a, measurement.voltage_v,
+                             measurement.voltage_measured_v, measurement.voltage_resistor_v))
+    rise_path = cfg.output_directory / f"rise_{tag}.csv"
+    with rise_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["rise_time_s", "rise_voltage_v", "rise_voltage_measured_v",
+                         "rise_voltage_resistor_v", "rise_current_diff_a"])
+        writer.writerows(zip(measurement.rise_time_s, measurement.rise_voltage_v,
+                             measurement.rise_voltage_measured_v, measurement.rise_voltage_resistor_v,
+                             measurement.rise_current_diff_a))
+
+
+def save_drift_params(cfg: ExperimentConfig, voltages: np.ndarray) -> None:
+    """Every drift-protocol setting (batch sizing/timing) plus the actual
+    fixed ramp applied, alongside save_run_config()'s instrument/waveform/
+    BO/device dump -- together these fully document one drift-test run."""
+    params_path = cfg.output_directory / f"drift_params_{cfg.run_timestamp}.json"
+    payload = {
+        "measurements_per_batch": MEASUREMENTS_PER_BATCH,
+        "intra_batch_delay_s": INTRA_BATCH_DELAY_S,
+        "initial_rest_s": INITIAL_REST_S,
+        "rest_growth_factor": REST_GROWTH_FACTOR,
+        "rest_max_s": REST_MAX_S,
+        "num_batches": NUM_BATCHES,
+        "linear_ramp_voltages_v": voltages.tolist(),
+    }
+    with params_path.open("w") as handle:
+        json.dump(payload, handle, indent=2)
+
+
 def main() -> None:
     cfg = ExperimentConfig()
     cfg = dataclasses.replace(cfg, data_mother_path=cfg.data_mother_path / DRIFT_NAME)
     output_dir = cfg.output_directory
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / f"drift_log_{cfg.run_timestamp}.csv"
+    rests_path = output_dir / f"drift_rests_{cfg.run_timestamp}.csv"
 
     voltages = linear_ramp(cfg)
+    save_run_config(cfg)
+    save_drift_params(cfg, voltages)
     print(f"Drift test: repeatedly applying fixed linear ramp {voltages}.")
     print(f"Batches of {MEASUREMENTS_PER_BATCH}, {INTRA_BATCH_DELAY_S}s apart, "
           f"with a growing rest between batches (starts at {INITIAL_REST_S}s, "
           f"x{REST_GROWTH_FACTOR} per batch"
           + (f", capped at {REST_MAX_S}s" if REST_MAX_S is not None else "") + ").")
     print(f"Logging to {log_path}")
+    print(f"Run config + drift params saved under {output_dir}")
 
     stop_requested = [False]
 
@@ -89,7 +135,7 @@ def main() -> None:
         stop_button.on_clicked(_on_stop_clicked)
 
     works, deltas_p, elapsed_s = [], [], []
-    batch_start_times = []
+    rest_intervals = []
     start = time.monotonic()
 
     def refresh_plot():
@@ -104,24 +150,37 @@ def main() -> None:
         ax_delta_p.set(title="delta_P drift", xlabel="Elapsed time (s)", ylabel="delta_P (C/m^2)")
         ax_delta_p.grid(True, alpha=0.3)
         for axis in (ax_work, ax_delta_p):
-            for batch_time in batch_start_times[1:]:
-                axis.axvline(batch_time, color="0.6", linestyle="--", linewidth=1)
+            y_low, y_high = axis.get_ylim()
+            label_y = y_low + 0.97 * (y_high - y_low)
+            for index, (rest_start, rest_end) in enumerate(rest_intervals):
+                axis.axvspan(rest_start, rest_end, color="0.6", alpha=0.3,
+                            label="Rest" if index == 0 else None)
+                duration = rest_end - rest_start
+                axis.text((rest_start + rest_end) / 2.0, label_y, f"{duration:.0f}s",
+                          ha="center", va="top", fontsize=8, color="0.3")
+            axis.set_ylim(y_low, y_high)
+            if rest_intervals:
+                axis.legend(loc="upper left", fontsize=8)
         figure.tight_layout()
         figure.canvas.draw_idle()
         figure.canvas.flush_events()
         plt.pause(0.05)
 
+    rests_handle = rests_path.open("a", newline="")
+    rests_writer = csv.writer(rests_handle)
+    if rests_handle.tell() == 0:
+        rests_writer.writerow(["batch_before", "rest_start_s", "rest_end_s", "planned_rest_s", "completed"])
+
     with log_path.open("a", newline="") as handle:
         writer = csv.writer(handle)
         if handle.tell() == 0:
             writer.writerow(["batch", "batch_iteration", "iteration", "timestamp",
-                             "elapsed_s", "Work", "delta_P"])
+                             "elapsed_s", "Work", "delta_P", "trace_file", "rise_file"])
 
         iteration = 0
         batch = 0
         try:
             while (NUM_BATCHES is None or batch < NUM_BATCHES) and not stop_requested[0]:
-                batch_start_times.append(time.monotonic() - start)
                 print(f"\n--- Batch {batch} ---")
                 for batch_iteration in range(MEASUREMENTS_PER_BATCH):
                     # apply_rise_and_measure() owns the AWG/scope connections
@@ -135,9 +194,12 @@ def main() -> None:
                     print(f"[batch {batch}, {batch_iteration}] t={now:.1f}s "
                           f"Work={measurement.work_j:.6g} J "
                           f"delta_P={measurement.delta_p_c_per_m2:.6g} C/m^2")
+                    save_trace(measurement, cfg, batch, batch_iteration)
+                    tag = f"{cfg.run_timestamp}_batch{batch:03d}_meas{batch_iteration:03d}"
                     writer.writerow([batch, batch_iteration, iteration,
                                      dt.datetime.now().isoformat(timespec="seconds"),
-                                     f"{now:.3f}", measurement.work_j, measurement.delta_p_c_per_m2])
+                                     f"{now:.3f}", measurement.work_j, measurement.delta_p_c_per_m2,
+                                     f"trace_{tag}.csv", f"rise_{tag}.csv"])
                     handle.flush()
 
                     works.append(measurement.work_j)
@@ -157,17 +219,27 @@ def main() -> None:
                     break
 
                 rest_s = rest_duration_s(batch)
+                batch_before_rest = batch
                 batch += 1
                 if (NUM_BATCHES is None or batch < NUM_BATCHES) and rest_s > 0:
                     print(f"Resting {rest_s:.1f}s before next batch...")
+                    rest_start = time.monotonic() - start
                     for _ in range(int(rest_s * 10)):
                         if stop_requested[0]:
                             break
                         time.sleep(0.1)
                         if plt is not None:
                             plt.pause(0.001)
+                    rest_end = time.monotonic() - start
+                    rest_intervals.append((rest_start, rest_end))
+                    rests_writer.writerow([batch_before_rest, f"{rest_start:.3f}", f"{rest_end:.3f}",
+                                          rest_s, not stop_requested[0]])
+                    rests_handle.flush()
+                    refresh_plot()
         except KeyboardInterrupt:
             print("\nDrift test stopped by user (Ctrl+C).")
+        finally:
+            rests_handle.close()
 
     # Defensive final shutdown -- apply_rise_and_measure already closes its
     # own AWG/scope sessions after every measurement, so this is normally a
@@ -178,6 +250,18 @@ def main() -> None:
         print(f"Could not confirm AWG output is off: {exc}")
     else:
         print("AWG output confirmed off. Safe to start the next run.")
+
+    try:
+        plot_path = plot_drift(log_path, rests_path)
+        print(f"Drift plot saved to {plot_path}")
+    except Exception as exc:
+        print(f"Could not generate drift plot: {exc}")
+
+    try:
+        video_path = make_drift_video(log_path, rests_path, default_video_output_path(log_path))
+        print(f"Drift I1-I2 evolution video saved to {video_path}")
+    except Exception as exc:
+        print(f"Could not generate drift I1-I2 video: {exc}")
 
     if plt is not None:
         figure.suptitle("Drift test complete - close this window to exit")

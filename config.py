@@ -32,7 +32,7 @@ class InstrumentConfig:
 
 @dataclass(frozen=True)
 class DeviceConfig:
-    device_name: str = "BTO_F9"
+    device_name: str = "BTO_F6"
     electrode_area_m2: float = (20e-6) ** 2
     current_preamplifier_gain_a_per_v: float = 1.0 / 50.0
     use_current_amplifier: bool = False
@@ -138,11 +138,11 @@ class ExperimentConfig:
     run_timestamp: str = field(
         default_factory=lambda: dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     )
-    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260908")
+    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260911")
     # Number of full AWG-buffer repeats to capture in one digitize call and
     # average over in pulse_subtraction.subtract_pund_pulses.
     scope_capture_periods: int = 1
-    output_on_wait_s: float = 1.0
+    output_on_wait_s: float = 0.05
     enable_control_panel: bool = True
     # Human-readable tag describing which swept parameter values this run
     # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each
