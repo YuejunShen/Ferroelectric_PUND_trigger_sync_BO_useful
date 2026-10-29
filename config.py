@@ -19,7 +19,7 @@ class InstrumentConfig:
     # current_termination_correction: float = 2.0
     voltage_scale_factor: float = 1.0
     current_scale_v_per_div: float = 0.02
-    voltage_scale_v_per_div: float = 0.3
+    voltage_scale_v_per_div: float = 1
     current_offset_v: float = 0.0
     voltage_offset_v: float = 0.0
     trigger_scale_v_per_div: float = 1.0
@@ -32,7 +32,7 @@ class InstrumentConfig:
 
 @dataclass(frozen=True)
 class DeviceConfig:
-    device_name: str = "BTO_F6"
+    device_name: str = "BTO_PLD219_2"
     electrode_area_m2: float = (20e-6) ** 2
     current_preamplifier_gain_a_per_v: float = 1.0 / 50.0
     use_current_amplifier: bool = False
@@ -55,45 +55,66 @@ class DeviceConfig:
 class PUNDWaveformConfig:
     sample_rate_hz: float = 5e7
     pulse_width_s: float = 2e-6
-    rise_time_s: float = 1e-6
+    rise_time_s: float = 2e-6
     pre_baseline_s: float = 2e-6
     post_baseline_s: float = 2e-6
-    gap1_s: float = 1e-6
-    gap2_s: float = 1e-6
+    gap1_s: float = 0.5e-6
+    gap2_s: float = 0.5e-6
     # Fixed (not BO-controlled) negative reset-pulse voltage: must fully pole
     # the device regardless of whatever positive rise voltages BO is testing.
-    reset_voltage_v: float = -0.8
+    reset_voltage_v: float = -1
+    # Fixed (not BO-controlled) flat-top amplitude of the two positive (P/U)
+    # pulses, independent of reset_voltage_v's magnitude -- the rise is
+    # concatenated directly into this flat top with no forced continuity
+    # (see waveform.build_pund_waveform), so BO is free to shape the approach
+    # without that shape also having to hit this amplitude at its last knot.
+    positive_amplitude_v: float = 1
+    # How the BOConfig.rise_points BO variables define the rise V(t):
+    # "points"    -- voltages at evenly spaced times, linearly interpolated.
+    # "bernstein" -- coefficients of a degree (rise_points - 1) Bernstein
+    #                polynomial. V(t) always stays between the smallest and
+    #                largest coefficient, so the BO voltage bounds hold without
+    #                clipping; V(0) is the first and V(end) the last coefficient.
+    #                Evenly spaced coefficients give the same linear ramp as
+    #                "points", so the initial linear rise is identical in both.
+    rise_basis: str = "bernstein"
     linear_minimum_voltage_v: float = 0.0
-    linear_maximum_voltage_v: float = 0.8
+    linear_maximum_voltage_v: float = 1
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 1.0  # BO upper bound
-    safety_max_voltage_v: float = 1.2  # hard ceiling, independent of the BO search bounds
+    maximum_voltage_v: float = 1  # BO upper bound
+    safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
     def __post_init__(self):
         if self.reset_voltage_v >= 0.0:
             raise ValueError("reset_voltage_v must be negative")
+        if self.positive_amplitude_v <= 0.0:
+            raise ValueError("positive_amplitude_v must be positive")
+        if self.rise_basis not in ("points", "bernstein"):
+            raise ValueError(f"Unknown rise_basis {self.rise_basis!r}")
         # minimum_voltage_v/linear_minimum_voltage_v may be negative (rise
         # shapes are free to dip below 0 V; PUND leakage cancellation only
         # requires both positive pulses share the identical control vector,
         # regardless of sign) -- bounded symmetrically by safety_max_voltage_v,
-        # same as the positive ceiling and reset_voltage_v below.
+        # same as the positive ceiling, reset_voltage_v, and positive_amplitude_v below.
         allowed_max = max(self.linear_maximum_voltage_v, self.maximum_voltage_v)
         allowed_min = min(self.linear_minimum_voltage_v, self.minimum_voltage_v)
         if (allowed_max > self.safety_max_voltage_v
                 or -allowed_min > self.safety_max_voltage_v
-                or -self.reset_voltage_v > self.safety_max_voltage_v):
-            raise ValueError("linear/BO/reset voltage exceeds safety_max_voltage_v")
+                or -self.reset_voltage_v > self.safety_max_voltage_v
+                or self.positive_amplitude_v > self.safety_max_voltage_v):
+            raise ValueError("linear/BO/reset/positive-amplitude voltage exceeds safety_max_voltage_v")
 
 
 @dataclass(frozen=True)
 class BOConfig:
-    # Number of voltage knots parameterizing the shared rise shape, i.e. the
+    # Number of voltage knots (or Bernstein coefficients, see
+    # PUNDWaveformConfig.rise_basis) parameterizing the shared rise shape, i.e. the
     # dimensionality of the BO search space (both positive pulses reuse the
     # same rise_points-length control vector -- see waveform.build_shaped_rise).
     rise_points: int = 10
-    initial_random_measurements: int =20
-    bo_steps: int = 150
+    initial_random_measurements: int =30
+    bo_steps: int = 400
     # Shifts the BO feasibility boundary relative to P_TARGET (the first,
     # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
     # negative LOOSENS the bound (delta_P may fall below P_TARGET by that
@@ -138,11 +159,18 @@ class ExperimentConfig:
     run_timestamp: str = field(
         default_factory=lambda: dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     )
-    data_mother_path: Path = Path(r"D:\Ferroelectric_BTO_optimization\20260911")
+    data_mother_path: Path = field(
+        default_factory=lambda: Path(r"D:\Ferroelectric_BTO_optimization") / dt.datetime.now().strftime("%Y%m%d")
+    )
     # Number of full AWG-buffer repeats to capture in one digitize call and
     # average over in pulse_subtraction.subtract_pund_pulses.
     scope_capture_periods: int = 1
     output_on_wait_s: float = 0.05
+    # Number of times to apply the initial linear-rise waveform (unmeasured,
+    # unsaved, not fed to BO) before the real measurement loop starts, to let
+    # the device settle into a repeatable switching state. 0 (default) skips
+    # this and starts measuring immediately, as before.
+    warmup_repeats: int = 100
     enable_control_panel: bool = True
     # Human-readable tag describing which swept parameter values this run
     # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each

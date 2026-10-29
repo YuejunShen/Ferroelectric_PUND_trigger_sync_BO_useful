@@ -15,6 +15,32 @@ from measurement import Measurement
 # any single day's data_mother_path folder, so it keeps accumulating rows
 # regardless of which day/device/sweep is currently running.
 RUN_LOG_PATH = Path(r"D:\Ferroelectric_BTO_optimization\run_log.csv")
+RUN_LOG_COLUMNS = ["logged_at", "run_timestamp", "device_name", "mode",
+                   "rise_basis", "rise_points", "initial_random_measurements", "bo_steps",
+                   "p_lower_relative_tolerance", "sweep_label", "repeat_index",
+                   "sweep_overrides_json", "output_directory"]
+# Value given to a column for runs logged before that column existed.
+_RUN_LOG_LEGACY_DEFAULTS = {"rise_basis": "points"}
+
+
+def _upgrade_run_log() -> list[str]:
+    """Rewrite an older run log so it has every current column; return its header."""
+    with RUN_LOG_PATH.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        old_columns = reader.fieldnames or []
+        rows = list(reader)
+    columns = RUN_LOG_COLUMNS + [name for name in old_columns if name not in RUN_LOG_COLUMNS]
+    if old_columns == columns:
+        return columns
+    for row in rows:
+        for name in columns:
+            if name not in old_columns:
+                row[name] = _RUN_LOG_LEGACY_DEFAULTS.get(name, "")
+    with RUN_LOG_PATH.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    return columns
 
 
 def append_run_log(cfg: ExperimentConfig, sweep_label: str = "",
@@ -24,28 +50,27 @@ def append_run_log(cfg: ExperimentConfig, sweep_label: str = "",
     so D:\\Ferroelectric_BTO_optimization\\run_log.csv accumulates a complete
     history of every experiment ever launched."""
     RUN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    new_file = not RUN_LOG_PATH.exists()
+    columns = _upgrade_run_log() if RUN_LOG_PATH.exists() else None
+    row = {
+        "logged_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "run_timestamp": cfg.run_timestamp,
+        "device_name": cfg.device.device_name,
+        "mode": cfg.bo.mode,
+        "rise_basis": cfg.waveform.rise_basis,
+        "rise_points": cfg.bo.rise_points,
+        "initial_random_measurements": cfg.bo.initial_random_measurements,
+        "bo_steps": cfg.bo.bo_steps,
+        "p_lower_relative_tolerance": cfg.bo.p_lower_relative_tolerance,
+        "sweep_label": sweep_label,
+        "repeat_index": repeat_index if repeat_index is not None else "",
+        "sweep_overrides_json": json.dumps(sweep_overrides or {}),
+        "output_directory": str(cfg.output_directory),
+    }
     with RUN_LOG_PATH.open("a", newline="") as handle:
-        writer = csv.writer(handle)
-        if new_file:
-            writer.writerow(["logged_at", "run_timestamp", "device_name", "mode",
-                             "rise_points", "initial_random_measurements", "bo_steps",
-                             "p_lower_relative_tolerance", "sweep_label", "repeat_index",
-                             "sweep_overrides_json", "output_directory"])
-        writer.writerow([
-            dt.datetime.now().isoformat(timespec="seconds"),
-            cfg.run_timestamp,
-            cfg.device.device_name,
-            cfg.bo.mode,
-            cfg.bo.rise_points,
-            cfg.bo.initial_random_measurements,
-            cfg.bo.bo_steps,
-            cfg.bo.p_lower_relative_tolerance,
-            sweep_label,
-            repeat_index if repeat_index is not None else "",
-            json.dumps(sweep_overrides or {}),
-            str(cfg.output_directory),
-        ])
+        writer = csv.DictWriter(handle, fieldnames=columns or RUN_LOG_COLUMNS, restval="")
+        if columns is None:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def save_run_config(cfg: ExperimentConfig) -> None:

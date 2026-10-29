@@ -33,6 +33,8 @@ from storage import RUN_LOG_PATH
 # number of runs.
 SWEEP = {
     "bo.rise_points": [14,12,10,8,6,4],
+    # Add e.g. "waveform.rise_basis": ["points", "bernstein"] to compare the
+    # two rise discretizations; the convergence plot draws one curve per basis.
 }
 # How many times to repeat *each* combination of the values above (e.g. to
 # average out BO's random_seed / measurement noise for a convergence test).
@@ -88,8 +90,10 @@ def build_configs():
 
 def _default_x_column() -> str | None:
     """The swept field to plot convergence against, if unambiguous (exactly
-    one key in SWEEP actually varies); None if there's more than one, or none."""
-    swept_keys = [key for key, values in SWEEP.items() if isinstance(values, list) and len(values) > 1]
+    one key in SWEEP actually varies); None if there's more than one, or none.
+    rise_basis is not counted -- the plot already draws one curve per basis."""
+    swept_keys = [key for key, values in SWEEP.items()
+                  if isinstance(values, list) and len(values) > 1 and key != "waveform.rise_basis"]
     return swept_keys[0].split(".")[-1] if len(swept_keys) == 1 else None
 
 

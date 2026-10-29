@@ -8,14 +8,16 @@ positive pulses share the exact same rise shape, which is required for PUND
 leakage cancellation (subtracting pulse 2 from pulse 1 only isolates the
 switching current if both pulses were driven with an identical stimulus).
 
-The flat top's amplitude is fixed at -reset_voltage_v (magnitude-symmetric
-with the reset pulse), independent of wherever the arbitrary rise ends up --
-the rise is concatenated directly into the flat top with no forced
-continuity, so BO is free to shape the approach without that shape also
-having to hit the target amplitude at its last knot.
+The flat top's amplitude is fixed at cfg.positive_amplitude_v, set
+independently of the reset pulse's own (also fixed) cfg.reset_voltage_v --
+independent of wherever the arbitrary rise ends up, too: the rise is
+concatenated directly into the flat top with no forced continuity, so BO is
+free to shape the approach without that shape also having to hit the target
+amplitude at its last knot.
 """
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 
@@ -59,11 +61,33 @@ def _ramp(start: float, stop: float, duration_s: float, sample_rate_hz: float) -
     return np.linspace(start, stop, count, endpoint=False, dtype=float)
 
 
-def build_shaped_rise(control_voltages_v: np.ndarray, rise_time_s: float, sample_rate_hz: float) -> np.ndarray:
-    """Interpolate BO control knots onto the rise's sample grid. The last
-    knot is just the rise's own endpoint -- it does not set the pulse's
-    flat-top voltage (see build_pund_waveform), so no continuity with the
-    following constant segment is implied or required."""
+def rise_voltage(controls: np.ndarray, normalized_t: np.ndarray, basis: str) -> np.ndarray:
+    """Evaluate the rise V at normalized times in [0, 1] from BO controls.
+
+    "points": controls are voltages at evenly spaced times, linearly
+    interpolated. "bernstein": controls are Bernstein coefficients c_k, so
+    V(s) = sum_k c_k * C(n, k) * s^k * (1 - s)^(n - k) with n = len(c) - 1.
+    """
+    controls = np.asarray(controls, dtype=float)
+    s = np.clip(np.asarray(normalized_t, dtype=float), 0.0, 1.0)
+    if basis == "points":
+        return np.interp(s, np.linspace(0.0, 1.0, controls.size), controls)
+    if basis == "bernstein":
+        degree = controls.size - 1
+        k = np.arange(degree + 1)
+        binomial = np.array([math.comb(degree, i) for i in k], dtype=float)
+        terms = binomial * s[..., None] ** k * (1.0 - s[..., None]) ** (degree - k)
+        return terms @ controls
+    raise ValueError(f"Unknown rise basis {basis!r}")
+
+
+def build_shaped_rise(control_voltages_v: np.ndarray, rise_time_s: float, sample_rate_hz: float,
+                      basis: str = "points") -> np.ndarray:
+    """Evaluate the BO controls (knots or Bernstein coefficients, see
+    rise_voltage) on the rise's sample grid. The last control is just the
+    rise's own endpoint -- it does not set the pulse's flat-top voltage (see
+    build_pund_waveform), so no continuity with the following constant
+    segment is implied or required."""
     controls = np.asarray(control_voltages_v, dtype=float)
     if controls.ndim != 1 or controls.size < 2:
         raise ValueError("control_voltages_v must be a 1D array with at least 2 points")
@@ -72,9 +96,7 @@ def build_shaped_rise(control_voltages_v: np.ndarray, rise_time_s: float, sample
     count = int(round(rise_time_s * sample_rate_hz))
     if count <= 0:
         raise ValueError("rise_time_s must be positive")
-    sample_t = np.arange(count) / sample_rate_hz
-    control_t = np.linspace(sample_t[0], sample_t[-1], controls.size)
-    return np.interp(sample_t, control_t, controls)
+    return rise_voltage(controls, np.linspace(0.0, 1.0, count), basis)
 
 
 def positive_rise_windows(cfg: PUNDWaveformConfig) -> PundTiming:
@@ -107,11 +129,12 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
     if np.any(np.abs(controls) > cfg.safety_max_voltage_v):
         raise ValueError("A rise voltage point exceeds safety_max_voltage_v")
 
-    # Flat-top amplitude is fixed, magnitude-symmetric with the reset pulse --
-    # independent of the arbitrary rise's own endpoint (controls[-1]), which
-    # is concatenated directly into it with no forced continuity.
-    positive_amplitude = -cfg.reset_voltage_v
-    shaped_rise = build_shaped_rise(controls, cfg.rise_time_s, cfg.sample_rate_hz)
+    # Flat-top amplitude is fixed at cfg.positive_amplitude_v, set independently
+    # of cfg.reset_voltage_v -- and independent of the arbitrary rise's own
+    # endpoint (controls[-1]), which is concatenated directly into it with no
+    # forced continuity.
+    positive_amplitude = cfg.positive_amplitude_v
+    shaped_rise = build_shaped_rise(controls, cfg.rise_time_s, cfg.sample_rate_hz, cfg.rise_basis)
     flat_top = _constant(positive_amplitude, cfg.pulse_width_s, cfg.sample_rate_hz)
     fall = _ramp(positive_amplitude, 0.0, cfg.rise_time_s, cfg.sample_rate_hz)
     positive_pulse = np.concatenate((shaped_rise, flat_top, fall))

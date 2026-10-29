@@ -9,6 +9,9 @@ NUM_BATCHES batches (None = run batches until interrupted with Ctrl+C).
 The ramp used is np.linspace(linear_minimum_voltage_v, linear_maximum_voltage_v,
 rise_points) from config.py -- the same "initial linear rise" run_experiment.py
 uses as its very first BO evaluation.
+
+To run several drift tests back to back with different settings, use
+run_drift_sweep.py, which calls run_drift_once() below once per setting.
 """
 
 import csv
@@ -41,11 +44,22 @@ NUM_BATCHES: int | None = 6
 DRIFT_NAME = "drift_test"
 
 
-def rest_duration_s(batches_completed: int) -> float:
-    """Rest before the batch after `batches_completed` full batches, i.e. 0 ->
-    the rest after batch 0, 1 -> the rest after batch 1, etc."""
-    duration = INITIAL_REST_S * (REST_GROWTH_FACTOR ** batches_completed)
-    return duration if REST_MAX_S is None else min(duration, REST_MAX_S)
+@dataclasses.dataclass(frozen=True)
+class DriftProtocol:
+    """The batch sizing/timing settings above, bundled so run_drift_sweep.py
+    can override them per run (as "drift.<field>" sweep keys)."""
+    measurements_per_batch: int = MEASUREMENTS_PER_BATCH
+    intra_batch_delay_s: float = INTRA_BATCH_DELAY_S
+    initial_rest_s: float = INITIAL_REST_S
+    rest_growth_factor: float = REST_GROWTH_FACTOR
+    rest_max_s: float | None = REST_MAX_S
+    num_batches: int | None = NUM_BATCHES
+
+    def rest_duration_s(self, batches_completed: int) -> float:
+        """Rest before the batch after `batches_completed` full batches, i.e. 0 ->
+        the rest after batch 0, 1 -> the rest after batch 1, etc."""
+        duration = self.initial_rest_s * (self.rest_growth_factor ** batches_completed)
+        return duration if self.rest_max_s is None else min(duration, self.rest_max_s)
 
 
 def linear_ramp(cfg: ExperimentConfig) -> np.ndarray:
@@ -75,27 +89,23 @@ def save_trace(measurement: Measurement, cfg: ExperimentConfig, batch: int, batc
                              measurement.rise_current_diff_a))
 
 
-def save_drift_params(cfg: ExperimentConfig, voltages: np.ndarray) -> None:
+def save_drift_params(cfg: ExperimentConfig, protocol: DriftProtocol, voltages: np.ndarray) -> None:
     """Every drift-protocol setting (batch sizing/timing) plus the actual
     fixed ramp applied, alongside save_run_config()'s instrument/waveform/
     BO/device dump -- together these fully document one drift-test run."""
     params_path = cfg.output_directory / f"drift_params_{cfg.run_timestamp}.json"
-    payload = {
-        "measurements_per_batch": MEASUREMENTS_PER_BATCH,
-        "intra_batch_delay_s": INTRA_BATCH_DELAY_S,
-        "initial_rest_s": INITIAL_REST_S,
-        "rest_growth_factor": REST_GROWTH_FACTOR,
-        "rest_max_s": REST_MAX_S,
-        "num_batches": NUM_BATCHES,
-        "linear_ramp_voltages_v": voltages.tolist(),
-    }
+    payload = dataclasses.asdict(protocol)
+    payload["linear_ramp_voltages_v"] = voltages.tolist()
     with params_path.open("w") as handle:
         json.dump(payload, handle, indent=2)
 
 
-def main() -> None:
-    cfg = ExperimentConfig()
-    cfg = dataclasses.replace(cfg, data_mother_path=cfg.data_mother_path / DRIFT_NAME)
+def run_drift_once(cfg: ExperimentConfig, protocol: DriftProtocol = DriftProtocol(),
+                   block_on_finish: bool = True) -> bool:
+    """One full drift test (all batches + rests) with `cfg`/`protocol`, saving
+    into cfg.output_directory. Returns True if the user stopped it early
+    ("Stop safely" button or Ctrl+C) -- run_drift_sweep.py uses this to end
+    the whole sweep rather than moving on to the next setting."""
     output_dir = cfg.output_directory
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / f"drift_log_{cfg.run_timestamp}.csv"
@@ -103,12 +113,12 @@ def main() -> None:
 
     voltages = linear_ramp(cfg)
     save_run_config(cfg)
-    save_drift_params(cfg, voltages)
+    save_drift_params(cfg, protocol, voltages)
     print(f"Drift test: repeatedly applying fixed linear ramp {voltages}.")
-    print(f"Batches of {MEASUREMENTS_PER_BATCH}, {INTRA_BATCH_DELAY_S}s apart, "
-          f"with a growing rest between batches (starts at {INITIAL_REST_S}s, "
-          f"x{REST_GROWTH_FACTOR} per batch"
-          + (f", capped at {REST_MAX_S}s" if REST_MAX_S is not None else "") + ").")
+    print(f"Batches of {protocol.measurements_per_batch}, {protocol.intra_batch_delay_s}s apart, "
+          f"with a growing rest between batches (starts at {protocol.initial_rest_s}s, "
+          f"x{protocol.rest_growth_factor} per batch"
+          + (f", capped at {protocol.rest_max_s}s" if protocol.rest_max_s is not None else "") + ").")
     print(f"Logging to {log_path}")
     print(f"Run config + drift params saved under {output_dir}")
 
@@ -122,7 +132,8 @@ def main() -> None:
         plt.ion()
         figure, (ax_work, ax_delta_p) = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
         figure.subplots_adjust(bottom=0.18)
-        figure.canvas.manager.set_window_title("Drift test")
+        figure.canvas.manager.set_window_title(
+            f"Drift test - {cfg.sweep_tag}" if cfg.sweep_tag else "Drift test")
 
         def _on_stop_clicked(_event):
             stop_requested[0] = True
@@ -169,7 +180,8 @@ def main() -> None:
     rests_handle = rests_path.open("a", newline="")
     rests_writer = csv.writer(rests_handle)
     if rests_handle.tell() == 0:
-        rests_writer.writerow(["batch_before", "rest_start_s", "rest_end_s", "planned_rest_s", "completed"])
+        rests_writer.writerow(["batch_before", "rest_start_s", "rest_end_s", "planned_rest_s", "completed",
+                               "output_off_confirmed_at_start", "output_on_at_end"])
 
     with log_path.open("a", newline="") as handle:
         writer = csv.writer(handle)
@@ -180,9 +192,9 @@ def main() -> None:
         iteration = 0
         batch = 0
         try:
-            while (NUM_BATCHES is None or batch < NUM_BATCHES) and not stop_requested[0]:
+            while (protocol.num_batches is None or batch < protocol.num_batches) and not stop_requested[0]:
                 print(f"\n--- Batch {batch} ---")
-                for batch_iteration in range(MEASUREMENTS_PER_BATCH):
+                for batch_iteration in range(protocol.measurements_per_batch):
                     # apply_rise_and_measure() owns the AWG/scope connections
                     # for exactly this one measurement and always closes them
                     # (its own try/finally) before returning -- so the stop
@@ -211,33 +223,43 @@ def main() -> None:
                     if stop_requested[0]:
                         print("Stop requested -- finishing cleanly after this measurement.")
                         break
-                    is_last_in_batch = batch_iteration == MEASUREMENTS_PER_BATCH - 1
-                    if not is_last_in_batch and INTRA_BATCH_DELAY_S > 0:
-                        time.sleep(INTRA_BATCH_DELAY_S)
+                    is_last_in_batch = batch_iteration == protocol.measurements_per_batch - 1
+                    if not is_last_in_batch and protocol.intra_batch_delay_s > 0:
+                        time.sleep(protocol.intra_batch_delay_s)
 
                 if stop_requested[0]:
                     break
 
-                rest_s = rest_duration_s(batch)
+                rest_s = protocol.rest_duration_s(batch)
                 batch_before_rest = batch
                 batch += 1
-                if (NUM_BATCHES is None or batch < NUM_BATCHES) and rest_s > 0:
+                if (protocol.num_batches is None or batch < protocol.num_batches) and rest_s > 0:
                     print(f"Resting {rest_s:.1f}s before next batch...")
+                    # Confirmed (read-back) off at the start of the rest, and
+                    # re-queried at its end, both logged -- so the rests CSV
+                    # itself proves the device was not driven during the rest.
+                    ArbGenerator(cfg).output(False)
                     rest_start = time.monotonic() - start
-                    for _ in range(int(rest_s * 10)):
-                        if stop_requested[0]:
-                            break
-                        time.sleep(0.1)
+                    # Deadline-based: plt.pause() takes far longer than its
+                    # nominal 1 ms, so counting fixed 0.1 s sleeps made rests
+                    # run ~1.5x longer than planned.
+                    rest_deadline = time.monotonic() + rest_s
+                    while not stop_requested[0] and time.monotonic() < rest_deadline:
+                        time.sleep(min(0.1, max(0.0, rest_deadline - time.monotonic())))
                         if plt is not None:
                             plt.pause(0.001)
                     rest_end = time.monotonic() - start
+                    output_on_at_end = ArbGenerator(cfg).output_enabled()
+                    if output_on_at_end:
+                        print("WARNING: AWG output was found ON at the end of this rest.")
                     rest_intervals.append((rest_start, rest_end))
                     rests_writer.writerow([batch_before_rest, f"{rest_start:.3f}", f"{rest_end:.3f}",
-                                          rest_s, not stop_requested[0]])
+                                          rest_s, not stop_requested[0], True, output_on_at_end])
                     rests_handle.flush()
                     refresh_plot()
         except KeyboardInterrupt:
             print("\nDrift test stopped by user (Ctrl+C).")
+            stop_requested[0] = True
         finally:
             rests_handle.close()
 
@@ -264,11 +286,23 @@ def main() -> None:
         print(f"Could not generate drift I1-I2 video: {exc}")
 
     if plt is not None:
-        figure.suptitle("Drift test complete - close this window to exit")
-        stop_button.label.set_text("Stop safely")
-        stop_button.ax.set_facecolor("0.85")
-        plt.ioff()
-        plt.show()
+        if block_on_finish:
+            figure.suptitle("Drift test complete - close this window to exit")
+            stop_button.label.set_text("Stop safely")
+            stop_button.ax.set_facecolor("0.85")
+            plt.ioff()
+            plt.show()
+        else:
+            # The plot was already saved by plot_drift() above; close the live
+            # window so a sweep doesn't pile up one window per setting.
+            plt.close(figure)
+    return stop_requested[0]
+
+
+def main() -> None:
+    cfg = ExperimentConfig()
+    cfg = dataclasses.replace(cfg, data_mother_path=cfg.data_mother_path / DRIFT_NAME)
+    run_drift_once(cfg)
 
 
 if __name__ == "__main__":

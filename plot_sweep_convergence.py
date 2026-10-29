@@ -69,21 +69,26 @@ def plot_convergence(run_log_path: Path, x_column: str = "rise_points",
     if log.empty:
         raise ValueError("No runs had a computable Work ratio (missing/empty bo_history_*.csv?)")
 
-    grouped = log.groupby(x_column)["work_ratio"]
-    x = grouped.mean().index.to_numpy(float)
-    means = grouped.mean().to_numpy(float)
-    stds = grouped.std(ddof=0).fillna(0.0).to_numpy(float)  # 0 for single-repeat points
-    counts = grouped.count().to_numpy(int)
-    order = np.argsort(x)
-    x, means, stds, counts = x[order], means[order], stds[order], counts[order]
+    # Runs logged before rise_basis existed always used "points". One curve per basis.
+    if "rise_basis" not in log:
+        log["rise_basis"] = "points"
+    log["rise_basis"] = log["rise_basis"].fillna("points")
 
     figure, axis = plt.subplots(figsize=(7, 5))
-    axis.errorbar(x, means, yerr=stds, marker="o", markersize=6, capsize=4,
-                 color="tab:blue", ecolor="tab:blue", linewidth=1.5, zorder=3)
-    for xi, yi, ni in zip(x, means, counts):
-        if ni > 1:
-            axis.annotate(f"n={ni}", (xi, yi), textcoords="offset points", xytext=(0, 8),
-                          fontsize=8, ha="center", color="0.35")
+    for basis, basis_log in log.groupby("rise_basis"):
+        grouped = basis_log.groupby(x_column)["work_ratio"]
+        x = grouped.mean().index.to_numpy(float)
+        means = grouped.mean().to_numpy(float)
+        stds = grouped.std(ddof=0).fillna(0.0).to_numpy(float)  # 0 for single-repeat points
+        counts = grouped.count().to_numpy(int)
+        order = np.argsort(x)
+        x, means, stds, counts = x[order], means[order], stds[order], counts[order]
+        axis.errorbar(x, means, yerr=stds, marker="o", markersize=6, capsize=4,
+                      linewidth=1.5, zorder=3, label=f"{basis} basis")
+        for xi, yi, ni in zip(x, means, counts):
+            if ni > 1:
+                axis.annotate(f"n={ni}", (xi, yi), textcoords="offset points", xytext=(0, 8),
+                              fontsize=8, ha="center", color="0.35")
     axis.axhline(1.0, color="0.6", linestyle="--", linewidth=1, label="linear-rise baseline", zorder=1)
     axis.set(xlabel=x_column, ylabel="Best feasible Work / linear-rise Work",
              title=f"BO convergence vs. {x_column}")

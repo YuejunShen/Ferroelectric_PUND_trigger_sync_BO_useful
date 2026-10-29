@@ -34,7 +34,9 @@ class Measurement:
     proposed_control_voltages_v: np.ndarray
     # What the scope actually measured at those same knot times -- can differ
     # from proposed_control_voltages_v due to AWG DAC quantization, slew-rate
-    # limiting, cabling, etc.
+    # limiting, cabling, etc. With rise_basis="bernstein" the proposed values
+    # are coefficients, not voltages at these times, so compare against
+    # waveform.rise_voltage evaluated at the knot times instead.
     measured_control_voltages_v: np.ndarray
 
 

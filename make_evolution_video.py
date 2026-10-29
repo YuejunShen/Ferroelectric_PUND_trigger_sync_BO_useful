@@ -17,7 +17,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 
 from config import ExperimentConfig, PUNDWaveformConfig
-from waveform import positive_rise_windows
+from waveform import positive_rise_windows, rise_voltage
 
 # User-editable folder containing bo_history_*.csv and rise_*.csv files.
 DATA_FOLDER: Path | None = Path(r"D:\Ferroelectric_BTO_optimization\20260821\BO_pund_rise_BTO_F9_1533")
@@ -117,6 +117,9 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
     feasible = history["feasible"].astype(str).str.lower().eq("true")
     history = history.assign(feasible=feasible)
     timing = positive_rise_windows(waveform_cfg)
+    # Runs whose run_config predates rise_basis load with its "points" default.
+    basis = waveform_cfg.rise_basis
+    control_label = "Bernstein coefficients" if basis == "bernstein" else "BO control knots"
 
     reference_rise = rises[0]
     reference_time = reference_rise["rise_time_s"].to_numpy(float)
@@ -195,7 +198,10 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
 
         ax_v.plot(reference_time, reference_v, "k--", linewidth=1.2, label="linear rise V(t)")
         ax_v.plot(time_s, voltage_v, color="tab:blue", linewidth=2, label="measured V(t)")
-        ax_v.scatter(control_t, controls, color="tab:blue", s=24, zorder=4, label="BO control knots")
+        commanded_v = rise_voltage(controls, (time_s - time_s[0]) / (time_s[-1] - time_s[0]), basis)
+        ax_v.plot(time_s, commanded_v, color="tab:cyan", linestyle=":", linewidth=1.5,
+                  label=f"commanded V(t) ({basis})")
+        ax_v.scatter(control_t, controls, color="tab:blue", s=24, zorder=4, label=control_label)
         ax_v.set(title="Rise voltage", xlabel="Rise time (s)", ylabel="Voltage (V)")
         ax_v.set_xlim(reference_time[0], reference_time[-1])
         ax_v.set_ylim(rise_v_low, rise_v_high)
@@ -271,6 +277,9 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
         ax_full_i.set_ylim(full_i_low, full_i_high)
         ax_full.yaxis.set_major_locator(MaxNLocator(5))
         ax_full_i.yaxis.set_major_locator(MaxNLocator(5))
+        # clear() resets a twinx axis' label/ticks to the left side; put them back.
+        ax_full_i.yaxis.tick_right()
+        ax_full_i.yaxis.set_label_position("right")
         ax_full_i.set_ylabel("Current (A)", color="tab:green")
         ax_full_i.tick_params(axis="y", colors="tab:green")
         ax_full.grid(True, alpha=0.3)

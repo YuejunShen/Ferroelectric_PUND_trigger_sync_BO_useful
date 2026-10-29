@@ -1,6 +1,7 @@
 """Live, iteration-by-iteration visualization for the PUND rise-shape BO experiment."""
 
 import numpy as np
+from waveform import rise_voltage
 
 
 class ControlPanel:
@@ -45,15 +46,26 @@ class ControlPanel:
         duration = self.cfg.waveform.rise_time_s
         control_t = np.linspace(0.0, duration, len(control_voltages_v))
         dense_t = np.linspace(0.0, duration, 1000)
-        dense_v = np.interp(dense_t, control_t, control_voltages_v)
+        basis = self.cfg.waveform.rise_basis
+        dense_v = rise_voltage(control_voltages_v, dense_t / duration, basis)
         self.ax_next.clear()
         self.ax_next.plot(dense_t * 1e6, dense_v, color="tab:orange", linewidth=2)
         self.ax_next.scatter(control_t * 1e6, control_voltages_v, color="tab:red", zorder=3)
-        self.ax_next.set(title="Next BO rise choice", xlabel="Rise time (us)", ylabel="Voltage (V)")
+        self.ax_next.set(title=f"Next BO rise choice ({basis}{len(control_voltages_v)})",
+                         xlabel="Rise time (us)", ylabel="Voltage (V)")
         self.ax_next.set_xlim(0.0, duration * 1e6)
         self.ax_next.grid(True, alpha=0.3)
         self.figure.suptitle(status)
         self._refresh()
+
+    def set_status(self, status):
+        """Update the title and let the window handle pending clicks (e.g. "Stop
+        safely") during loops that don't otherwise redraw, such as the warm-up."""
+        if not self.enabled:
+            return
+        self.figure.suptitle(status)
+        self.figure.canvas.draw_idle()
+        self.plt.pause(0.01)
 
     def _refresh(self):
         self.figure.tight_layout(pad=3.0)

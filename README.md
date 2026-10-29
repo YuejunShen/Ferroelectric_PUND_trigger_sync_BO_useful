@@ -20,8 +20,12 @@ The arbitrary waveform generator (AWG) produces:
 baseline -> negative reset -> gap -> P pulse -> gap -> U pulse -> baseline
 ```
 
-The P and U pulses use the same piecewise-linear rise. Bayesian optimization
-selects the rise-knot voltages; the pulse plateau and fall remain fixed. The
+The P and U pulses use the same shaped rise. Bayesian optimization selects
+the rise's control values; the pulse plateau and fall remain fixed.
+`PUNDWaveformConfig.rise_basis` sets what those values mean: `"points"`
+(default) treats them as voltage knots joined by straight lines, and
+`"bernstein"` treats them as coefficients of a smooth Bernstein polynomial
+that always stays between the smallest and largest coefficient. The
 scope captures both pulses, and the program subtracts their currents
 (`I_diff = I_P - I_U`) to estimate switching behavior over the rise window.
 

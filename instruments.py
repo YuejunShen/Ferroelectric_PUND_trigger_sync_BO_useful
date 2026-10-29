@@ -26,7 +26,7 @@ class ArbGenerator:
     def upload(self, waveform: ArbWaveform) -> None:
         # Vpp and offset follow the complete waveform range. The plateau samples
         # are transformed by the same affine mapping, so they still decode to
-        # reset_voltage_v and -reset_voltage_v for every BO rise protocol.
+        # reset_voltage_v and positive_amplitude_v for every BO rise protocol.
         normalized, vpp, offset = normalize_for_generator(waveform.voltage_v)
         rm = _resource_manager()
         fg = rm.open_resource(self.cfg.instruments.function_generator_address)
@@ -53,8 +53,26 @@ class ArbGenerator:
         rm = _resource_manager()
         fg = rm.open_resource(self.cfg.instruments.function_generator_address)
         fg.timeout = self.cfg.instruments.function_generator_timeout_ms
+        fg.write_termination = fg.read_termination = "\n"
         try:
             fg.write("OUTP ON" if enabled else "OUTP OFF")
+            if not enabled:
+                # Read the state back so "off" is confirmed by the instrument,
+                # not just assumed from a write that may have been dropped.
+                state = fg.query("OUTP?").strip()
+                if state not in ("0", "OFF"):
+                    raise RuntimeError(f"AWG output still on after OUTP OFF (OUTP? returned {state!r})")
+        finally:
+            fg.close()
+
+    def output_enabled(self) -> bool:
+        """Query (without changing) whether the AWG output is currently on."""
+        rm = _resource_manager()
+        fg = rm.open_resource(self.cfg.instruments.function_generator_address)
+        fg.timeout = self.cfg.instruments.function_generator_timeout_ms
+        fg.write_termination = fg.read_termination = "\n"
+        try:
+            return fg.query("OUTP?").strip() not in ("0", "OFF")
         finally:
             fg.close()
 
