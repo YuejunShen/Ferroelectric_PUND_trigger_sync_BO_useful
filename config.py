@@ -56,14 +56,14 @@ class PUNDWaveformConfig:
     sample_rate_hz: float = 10e7
     pulse_width_s: float = 2e-6
     # Duration of the two BO-shaped positive (P/U) rises.
-    rise_time_s: float = 2e-6
+    rise_time_s: float = 1e-6
     # Duration of every other ramp: the reset pulse's rise and fall and the
     # two positive pulses' falls. None (default) reuses rise_time_s, as before.
     other_ramp_time_s: float | None = 0.1e-6
     pre_baseline_s: float = 2e-6
     post_baseline_s: float = 2e-6
-    gap1_s: float = 0.5e-6
-    gap2_s: float = 0.5e-6
+    gap1_s: float = 1e-6
+    gap2_s: float = 1e-6
     # Fixed (not BO-controlled) negative reset-pulse voltage: must fully pole
     # the device regardless of whatever positive rise voltages BO is testing.
     reset_voltage_v: float = -1
@@ -85,7 +85,7 @@ class PUNDWaveformConfig:
     linear_minimum_voltage_v: float = 0.0
     linear_maximum_voltage_v: float = 1
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 1  # BO upper bound
+    maximum_voltage_v: float = 1.25  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
@@ -181,7 +181,7 @@ class ExperimentConfig:
     # unsaved, not fed to BO) before the real measurement loop starts, to let
     # the device settle into a repeatable switching state. 0 (default) skips
     # this and starts measuring immediately, as before.
-    warmup_repeats: int = 0
+    warmup_repeats: int = 200
     enable_control_panel: bool = True
     # Human-readable tag describing which swept parameter values this run
     # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each

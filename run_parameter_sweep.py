@@ -32,9 +32,11 @@ from storage import RUN_LOG_PATH
 # bare (non-list) value overrides that field but does not multiply the
 # number of runs.
 SWEEP = {
-    "bo.rise_points": [14,12,10,8,6,4],
-    # Add e.g. "waveform.rise_basis": ["points", "bernstein"] to compare the
-    # two rise discretizations; the convergence plot draws one curve per basis.
+    "bo.rise_points": [12,10,8,6,4],
+    # Compare both rise discretizations (see PUNDWaveformConfig.rise_basis);
+    # the convergence plot draws one curve per basis. Use a single-item list
+    # (or a bare string) to run only one.
+    "waveform.rise_basis": ["points", "bernstein"],
 }
 # How many times to repeat *each* combination of the values above (e.g. to
 # average out BO's random_seed / measurement noise for a convergence test).
@@ -43,7 +45,7 @@ REPEATS = 4
 # data_mother_path (config.py) -- e.g. D:\Ferroelectric_BTO_optimization\
 # 20260907\rise_points_scan\ -- instead of scattered across separate
 # per-run folders, so the whole sweep and its convergence plot live together.
-SWEEP_NAME = "rise_points_scan"
+SWEEP_NAME = "rise_points_basis_scan"
 SWEEP_FOLDER = ExperimentConfig().data_mother_path / SWEEP_NAME
 
 
