@@ -66,13 +66,13 @@ class PUNDWaveformConfig:
     gap2_s: float = 1e-6
     # Fixed (not BO-controlled) negative reset-pulse voltage: must fully pole
     # the device regardless of whatever positive rise voltages BO is testing.
-    reset_voltage_v: float = -1
+    reset_voltage_v: float = -0.75
     # Fixed (not BO-controlled) flat-top amplitude of the two positive (P/U)
     # pulses, independent of reset_voltage_v's magnitude -- the rise is
     # concatenated directly into this flat top with no forced continuity
     # (see waveform.build_pund_waveform), so BO is free to shape the approach
     # without that shape also having to hit this amplitude at its last knot.
-    positive_amplitude_v: float = 1
+    positive_amplitude_v: float = 0.75
     # How the BOConfig.rise_points BO variables define the rise V(t):
     # "points"    -- voltages at evenly spaced times, linearly interpolated.
     # "bernstein" -- coefficients of a degree (rise_points - 1) Bernstein
@@ -83,9 +83,9 @@ class PUNDWaveformConfig:
     #                "points", so the initial linear rise is identical in both.
     rise_basis: str = "bernstein"
     linear_minimum_voltage_v: float = 0.0
-    linear_maximum_voltage_v: float = 1
+    linear_maximum_voltage_v: float = 0.75
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 1.25  # BO upper bound
+    maximum_voltage_v: float = 0.75  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
@@ -124,7 +124,7 @@ class BOConfig:
     # dimensionality of the BO search space (both positive pulses reuse the
     # same rise_points-length control vector -- see waveform.build_shaped_rise).
     rise_points: int = 10
-    initial_random_measurements: int =30
+    initial_random_measurements: int =60
     bo_steps: int = 400
     # Shifts the BO feasibility boundary relative to P_TARGET (the first,
     # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
@@ -132,10 +132,17 @@ class BOConfig:
     # fraction and still be searched as feasible), positive TIGHTENS it,
     # 0.0 means the search boundary sits exactly at P_TARGET. Does not
     # affect the "feasible" column, which always reports delta_P >= P_TARGET.
-    p_lower_relative_tolerance: float = 1e-3
+    p_lower_relative_tolerance: float = 2e-3
     random_seed: int = field(default_factory=lambda: time.time_ns() % (2**32))
     n_restarts: int = 5
     max_iter: int = 100
+    # Xopt GP noise prior. True (default, the September behaviour) assumes
+    # near-noiseless outputs (GammaPrior(1, 100) on the standardized noise),
+    # so the GP passes close to every measurement. False uses a broad prior
+    # that can explain real delta_P differences away as noise -- on BTO_F9 it
+    # made the GP over-predict delta_P for its own proposals (+0.01% predicted
+    # vs -0.62% measured, 20261029 run), so keep True unless testing.
+    use_low_noise_prior: bool = True
     # None avoids Botorch's Windows threadpoolctl timeout wrapper.
     max_time_s: float | None = None
     # "optimize" (default): constrained Expected Improvement, as before --
@@ -181,7 +188,7 @@ class ExperimentConfig:
     # unsaved, not fed to BO) before the real measurement loop starts, to let
     # the device settle into a repeatable switching state. 0 (default) skips
     # this and starts measuring immediately, as before.
-    warmup_repeats: int = 200
+    warmup_repeats: int = 150
     enable_control_panel: bool = True
     # Human-readable tag describing which swept parameter values this run
     # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each

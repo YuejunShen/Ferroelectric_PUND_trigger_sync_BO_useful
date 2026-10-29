@@ -31,7 +31,7 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
     if cfg.warmup_repeats > 0:
         print(f"Applying linear warm-up rise {cfg.warmup_repeats} time(s) before measuring...")
         for warmup in range(1, cfg.warmup_repeats + 1):
-            apply_rise_and_measure(proposed_voltage, cfg)
+            panel.run_responsive(apply_rise_and_measure, proposed_voltage, cfg)
             panel.set_status(f"Linear warm-up {warmup}/{cfg.warmup_repeats}")
             if panel.stop_requested:
                 print(f"Stop requested -- ending during warm-up ({warmup}/{cfg.warmup_repeats}), "
@@ -39,7 +39,7 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
                 break
     for iteration in range(0 if panel.stop_requested else cfg.bo.total_measurements):
         print(f"Iteration {iteration}: applying {proposed_voltage}")
-        measurement = apply_rise_and_measure(proposed_voltage, cfg)
+        measurement = panel.run_responsive(apply_rise_and_measure, proposed_voltage, cfg)
         result = optimizer.observe(
             measurement.proposed_control_voltages_v,
             measurement.work_j,
@@ -53,7 +53,7 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
         print(f"Work={result['Work']:.8g} J, delta_P={result['delta_P']:.8g} C/m^2, "
               f"feasible={result['feasible']}, phase={result['phase']}, "
               f"max|measured-proposed|={knot_error.max():.4g} V")
-        proposed_voltage = optimizer.propose()
+        proposed_voltage = panel.run_responsive(optimizer.propose)
         panel.update(measurement, result, proposed_voltage, iteration)
 
         if panel.stop_requested:

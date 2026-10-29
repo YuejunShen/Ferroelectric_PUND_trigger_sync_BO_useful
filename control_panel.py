@@ -67,6 +67,32 @@ class ControlPanel:
         self.figure.canvas.draw_idle()
         self.plt.pause(0.01)
 
+    def run_responsive(self, function, *args):
+        """Call function(*args) on a worker thread while keeping the window's
+        event loop running, so the panel stays restorable/clickable during a
+        long measurement or GP fit instead of freezing ("Not Responding")."""
+        if not self.enabled:
+            return function(*args)
+        import threading
+
+        outcome = {}
+
+        def work():
+            try:
+                outcome["value"] = function(*args)
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            # start_event_loop (not plt.pause) so the window is not re-shown
+            # or pulled to the front on every tick.
+            self.figure.canvas.start_event_loop(0.1)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
     def _refresh(self):
         self.figure.tight_layout(pad=3.0)
         self.figure.canvas.draw_idle()

@@ -75,7 +75,7 @@ class BayesianRiseOptimizer:
                 observables=["Work", "delta_P", "delta_P_NORM", "P_violation"],
             )
             generator = ExpectedImprovementGenerator(vocs=self.vocs)
-        generator.gp_constructor.use_low_noise_prior = True
+        generator.gp_constructor.use_low_noise_prior = self.bo_cfg.use_low_noise_prior
         generator.numerical_optimizer.n_restarts = self.bo_cfg.n_restarts
         generator.numerical_optimizer.max_iter = self.bo_cfg.max_iter
         generator.numerical_optimizer.max_time = self.bo_cfg.max_time_s
