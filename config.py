@@ -53,9 +53,13 @@ class DeviceConfig:
 
 @dataclass(frozen=True)
 class PUNDWaveformConfig:
-    sample_rate_hz: float = 5e7
+    sample_rate_hz: float = 10e7
     pulse_width_s: float = 2e-6
+    # Duration of the two BO-shaped positive (P/U) rises.
     rise_time_s: float = 2e-6
+    # Duration of every other ramp: the reset pulse's rise and fall and the
+    # two positive pulses' falls. None (default) reuses rise_time_s, as before.
+    other_ramp_time_s: float | None = 0.1e-6
     pre_baseline_s: float = 2e-6
     post_baseline_s: float = 2e-6
     gap1_s: float = 0.5e-6
@@ -92,6 +96,8 @@ class PUNDWaveformConfig:
             raise ValueError("positive_amplitude_v must be positive")
         if self.rise_basis not in ("points", "bernstein"):
             raise ValueError(f"Unknown rise_basis {self.rise_basis!r}")
+        if self.other_ramp_time_s is not None and self.other_ramp_time_s <= 0.0:
+            raise ValueError("other_ramp_time_s must be positive (or None to reuse rise_time_s)")
         # minimum_voltage_v/linear_minimum_voltage_v may be negative (rise
         # shapes are free to dip below 0 V; PUND leakage cancellation only
         # requires both positive pulses share the identical control vector,
@@ -104,6 +110,11 @@ class PUNDWaveformConfig:
                 or -self.reset_voltage_v > self.safety_max_voltage_v
                 or self.positive_amplitude_v > self.safety_max_voltage_v):
             raise ValueError("linear/BO/reset/positive-amplitude voltage exceeds safety_max_voltage_v")
+
+    @property
+    def other_ramp_s(self) -> float:
+        """Non-P/U-rise ramp time actually used (other_ramp_time_s, or rise_time_s if None)."""
+        return self.rise_time_s if self.other_ramp_time_s is None else self.other_ramp_time_s
 
 
 @dataclass(frozen=True)
@@ -170,7 +181,7 @@ class ExperimentConfig:
     # unsaved, not fed to BO) before the real measurement loop starts, to let
     # the device settle into a repeatable switching state. 0 (default) skips
     # this and starts measuring immediately, as before.
-    warmup_repeats: int = 100
+    warmup_repeats: int = 0
     enable_control_panel: bool = True
     # Human-readable tag describing which swept parameter values this run
     # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each

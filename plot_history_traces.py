@@ -52,8 +52,10 @@ def positive_rise_windows(waveform_cfg: dict):
     positive_rise_windows, inlined here to keep this script dependency-free."""
     pulse_width_s = waveform_cfg["pulse_width_s"]
     rise_time_s = waveform_cfg["rise_time_s"]
-    reset_pulse_duration = 2.0 * pulse_width_s + 2.0 * rise_time_s
-    positive_pulse_duration = pulse_width_s + 2.0 * rise_time_s
+    # Absent (older runs) or None means every other ramp reused rise_time_s.
+    other_ramp_s = waveform_cfg.get("other_ramp_time_s") or rise_time_s
+    reset_pulse_duration = 2.0 * pulse_width_s + 2.0 * other_ramp_s
+    positive_pulse_duration = rise_time_s + pulse_width_s + other_ramp_s
     first_rise_start = waveform_cfg["pre_baseline_s"] + reset_pulse_duration + waveform_cfg["gap1_s"]
     second_rise_start = first_rise_start + positive_pulse_duration + waveform_cfg["gap2_s"]
     return first_rise_start, second_rise_start, rise_time_s

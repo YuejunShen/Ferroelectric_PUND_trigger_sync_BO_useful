@@ -102,8 +102,8 @@ def build_shaped_rise(control_voltages_v: np.ndarray, rise_time_s: float, sample
 def positive_rise_windows(cfg: PUNDWaveformConfig) -> PundTiming:
     """Offsets of each positive pulse's rise onset, relative to the AWG
     buffer restart (t=0 = start of pre_baseline_s)."""
-    reset_pulse_duration = 2.0 * cfg.pulse_width_s + 2.0 * cfg.rise_time_s
-    positive_pulse_duration = cfg.pulse_width_s + 2.0 * cfg.rise_time_s
+    reset_pulse_duration = 2.0 * cfg.pulse_width_s + 2.0 * cfg.other_ramp_s
+    positive_pulse_duration = cfg.rise_time_s + cfg.pulse_width_s + cfg.other_ramp_s
     first_rise_start = cfg.pre_baseline_s + reset_pulse_duration + cfg.gap1_s
     second_rise_start = first_rise_start + positive_pulse_duration + cfg.gap2_s
     period_duration = (second_rise_start + positive_pulse_duration
@@ -136,12 +136,12 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
     positive_amplitude = cfg.positive_amplitude_v
     shaped_rise = build_shaped_rise(controls, cfg.rise_time_s, cfg.sample_rate_hz, cfg.rise_basis)
     flat_top = _constant(positive_amplitude, cfg.pulse_width_s, cfg.sample_rate_hz)
-    fall = _ramp(positive_amplitude, 0.0, cfg.rise_time_s, cfg.sample_rate_hz)
+    fall = _ramp(positive_amplitude, 0.0, cfg.other_ramp_s, cfg.sample_rate_hz)
     positive_pulse = np.concatenate((shaped_rise, flat_top, fall))
 
-    reset_rise = _ramp(0.0, cfg.reset_voltage_v, cfg.rise_time_s, cfg.sample_rate_hz)
+    reset_rise = _ramp(0.0, cfg.reset_voltage_v, cfg.other_ramp_s, cfg.sample_rate_hz)
     reset_flat = _constant(cfg.reset_voltage_v, 2.0 * cfg.pulse_width_s, cfg.sample_rate_hz)
-    reset_fall = _ramp(cfg.reset_voltage_v, 0.0, cfg.rise_time_s, cfg.sample_rate_hz)
+    reset_fall = _ramp(cfg.reset_voltage_v, 0.0, cfg.other_ramp_s, cfg.sample_rate_hz)
     reset_pulse = np.concatenate((reset_rise, reset_flat, reset_fall))
 
     voltage = np.concatenate((
