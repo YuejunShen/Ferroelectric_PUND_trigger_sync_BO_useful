@@ -85,8 +85,10 @@ class ControlPanel:
     def run_responsive(self, function, *args):
         """Call function(*args) on a worker thread while keeping the window's
         event loop running, so the panel stays restorable/clickable during a
-        long measurement or GP fit instead of freezing ("Not Responding")."""
-        if not self.enabled:
+        long measurement or GP fit instead of freezing ("Not Responding").
+        With cfg.responsive_control_panel False, just calls function(*args)
+        on the main thread."""
+        if not (self.enabled and self.cfg.responsive_control_panel):
             return function(*args)
         future = _worker().submit(function, *args)
         while not future.done():
@@ -163,3 +165,10 @@ class ControlPanel:
             self.plt.show()
         else:
             self.plt.close(self.figure)
+        # Destroy the closed window's Tk objects now, on the main thread. Left
+        # to Python's garbage collector, they can be collected on the worker
+        # thread during the next sweep run, where Tcl aborts the whole process
+        # (tcl86t.dll crash, 10/30 12:10 in run 3 of the sweep).
+        import gc
+
+        gc.collect()

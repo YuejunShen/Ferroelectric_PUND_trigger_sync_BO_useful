@@ -158,6 +158,13 @@ class ExperimentConfig:
     # Linear-rise repeats before measuring, to settle the device ("pareto" also uses them as reference)
     warmup_repeats: int = 150
     enable_control_panel: bool = True
+    # True: measurements/BO steps run on a worker thread so the panel stays
+    # clickable, but the Tk window then shares the process with a second
+    # thread (tcl86t.dll crash in the 10/30 sweep). False: everything on the
+    # main thread -- the panel shows "Not Responding" during each step but
+    # updates between them, and "Stop safely" still works. Keep False for
+    # long unattended sweeps.
+    responsive_control_panel: bool = False
     sweep_tag: str = ""  # set by run_parameter_sweep.py
 
     @property
