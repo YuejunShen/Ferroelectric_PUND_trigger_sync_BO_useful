@@ -17,10 +17,10 @@ from measurement import Measurement
 RUN_LOG_PATH = Path(r"D:\Ferroelectric_BTO_optimization\run_log.csv")
 RUN_LOG_COLUMNS = ["logged_at", "run_timestamp", "device_name", "mode",
                    "rise_basis", "rise_points", "initial_random_measurements", "bo_steps",
-                   "p_lower_relative_tolerance", "sweep_label", "repeat_index",
+                   "p_lower_relative_tolerance", "reference_interval", "sweep_label", "repeat_index",
                    "sweep_overrides_json", "output_directory"]
 # Value given to a column for runs logged before that column existed.
-_RUN_LOG_LEGACY_DEFAULTS = {"rise_basis": "points"}
+_RUN_LOG_LEGACY_DEFAULTS = {"rise_basis": "points", "reference_interval": 0}
 
 
 def _upgrade_run_log() -> list[str]:
@@ -61,6 +61,7 @@ def append_run_log(cfg: ExperimentConfig, sweep_label: str = "",
         "initial_random_measurements": cfg.bo.initial_random_measurements,
         "bo_steps": cfg.bo.bo_steps,
         "p_lower_relative_tolerance": cfg.bo.p_lower_relative_tolerance,
+        "reference_interval": cfg.bo.reference_interval,
         "sweep_label": sweep_label,
         "repeat_index": repeat_index if repeat_index is not None else "",
         "sweep_overrides_json": json.dumps(sweep_overrides or {}),
@@ -133,3 +134,29 @@ def save_measurement(measurement: Measurement, iteration: int, result: dict, cfg
                          result["P_SCALE"], result["WORK_SCALE"],
                          result["feasible"], result["phase"],
                          result["phase_evaluation"]])
+
+
+# History columns that depend on the linear-rise reference, not just on the row's own measurement.
+_REFERENCED_COLUMNS = ("Work_NORM", "delta_P_NORM", "P_target", "P_lower_bound", "P_violation",
+                       "P_lower_NORM", "P_SCALE", "WORK_SCALE", "feasible")
+
+
+def rewrite_history_references(cfg: ExperimentConfig, data) -> None:
+    """A new linear rise moves the reference of rows already written to the
+    history CSV (see BayesianRiseOptimizer._fit_reference); overwrite their
+    referenced columns with the optimizer's current values. Written to a
+    temporary file first, so an interrupted rewrite never loses the history."""
+    with cfg.history_file.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames
+        rows = list(reader)
+    for row in rows:
+        current = data.loc[int(row["evaluation"])]
+        for name in _REFERENCED_COLUMNS:
+            row[name] = current[name]
+    temporary = cfg.history_file.with_suffix(".tmp")
+    with temporary.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(cfg.history_file)

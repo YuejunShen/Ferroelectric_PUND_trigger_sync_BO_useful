@@ -139,7 +139,7 @@ class ControlPanel:
                                linestyle="--", label="Target delta_P")
         self.ax_charge.set_ylabel("delta_P (C/m^2)", color="tab:purple")
         self.ax_charge.tick_params(axis="y", colors="tab:purple")
-        self.ax_charge.legend(loc="upper right")
+        self.ax_charge.legend(loc="lower left")
 
         status = (f"Evaluation {iteration} | {result['phase']} | "
                   f"delta_P={result['delta_P']:.4g} C/m^2 | target={result['P_target']:.4g} C/m^2 | "

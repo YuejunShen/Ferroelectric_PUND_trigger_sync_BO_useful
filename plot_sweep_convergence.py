@@ -39,13 +39,16 @@ def work_ratio_for_run(output_directory: Path) -> float | None:
     if history.empty or "Work" not in history:
         return None
     linear_rows = history[history["phase"] == "linear rise"] if "phase" in history else history.iloc[:0]
-    linear_work = (linear_rows["Work"].iloc[0] if not linear_rows.empty
+    linear_work = (linear_rows["Work"].mean() if not linear_rows.empty
                    else history.sort_values("evaluation")["Work"].iloc[0])
     if linear_work == 0:
         return None
     feasible = history[history["feasible"]] if "feasible" in history else history
     if feasible.empty:
         feasible = history
+    if "phase" in history and (history["phase"] == "linear reference").any():
+        # Drift-corrected run: each row's Work against its own linear reference.
+        return (feasible["Work"] / feasible["WORK_SCALE"]).min()
     return feasible["Work"].min() / linear_work
 
 

@@ -40,7 +40,7 @@ SWEEP = {
 }
 # How many times to repeat *each* combination of the values above (e.g. to
 # average out BO's random_seed / measurement noise for a convergence test).
-REPEATS = 4
+REPEATS = 3
 # Every run in this sweep is grouped under one subfolder of today's usual
 # data_mother_path (config.py) -- e.g. D:\Ferroelectric_BTO_optimization\
 # 20260907\rise_points_scan\ -- instead of scattered across separate

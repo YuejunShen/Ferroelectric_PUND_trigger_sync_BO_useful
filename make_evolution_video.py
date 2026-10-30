@@ -24,7 +24,7 @@ DATA_FOLDER: Path | None = Path(r"D:\Ferroelectric_BTO_optimization\20260821\BO_
 
 # Marker shape encodes which phase an evaluation belongs to; color encodes
 # feasibility (independent of phase) -- see the work-vs-reference panel.
-_PHASE_MARKERS = {"linear rise": "s", "random initial": "x", "BO optimization": "o"}
+_PHASE_MARKERS = {"linear rise": "s", "linear reference": "s", "random initial": "x", "BO optimization": "o"}
 _FEASIBLE_COLORS = {True: "tab:green", False: "tab:red"}
 _WORK_PANEL_LEGEND_HANDLES = [
     Line2D([0], [0], marker="s", linestyle="None", markerfacecolor="none", markeredgecolor="k", label="linear rise"),
@@ -127,16 +127,25 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
     reference_idiff = reference_rise["rise_current_diff_a"].to_numpy(float)
     reference_delta_p_t = _cumulative_trapz(reference_idiff, reference_time) / area_m2
 
-    reference_work = float(history.iloc[0]["Work"])
-    p_target = float(history.iloc[0]["P_target"])
-    p_lower_bound = float(history.iloc[0]["P_lower_bound"])
-
-    excess_work = (history["Work"] - reference_work) / abs(reference_work)
+    if (history["phase"] == "linear reference").any():
+        # Drift-corrected run (BOConfig.reference_interval): each row has its
+        # own reference, interpolated between the linear rises around it.
+        excess_work = history["Work"] / history["WORK_SCALE"] - 1.0
+        p_target_rows = history["P_target"].to_numpy(float)
+        p_lower_bound_rows = history["P_lower_bound"].to_numpy(float)
+    else:
+        # Mean of the linear-rise rows (BOConfig.linear_repeats of them; one in
+        # older runs); the last row holds the final target, not a running mean.
+        reference_work = float(history.loc[history["phase"] == "linear rise", "Work"].mean())
+        excess_work = (history["Work"] - reference_work) / abs(reference_work)
+        p_target_rows = np.full(len(history), float(history.iloc[-1]["P_target"]))
+        p_lower_bound_rows = np.full(len(history), float(history.iloc[-1]["P_lower_bound"]))
+    p_target, p_lower_bound = p_target_rows[-1], p_lower_bound_rows[-1]
 
     delta_p_all = history["delta_P"].to_numpy(float)
     p_pad = max(0.15 * abs(p_target), 5.0 * abs(p_lower_bound - p_target), 1e-15)
-    p_axis_low = min(delta_p_all.min(), p_lower_bound) - p_pad
-    p_axis_high = max(delta_p_all.max(), p_target) + p_pad
+    p_axis_low = min(delta_p_all.min(), p_lower_bound_rows.min()) - p_pad
+    p_axis_high = max(delta_p_all.max(), p_target_rows.max()) + p_pad
 
     excess_bounds = [excess_work.min(), excess_work.max()]
     excess_axis_low, excess_axis_high = min(excess_bounds), max(excess_bounds)
@@ -158,7 +167,7 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
     rise_i_low, rise_i_high = _padded_bounds(
         np.concatenate([reference_idiff] + [r["rise_current_diff_a"].to_numpy(float) for r in rises]))
     delta_p_t_low, delta_p_t_high = _padded_bounds(
-        np.concatenate([reference_delta_p_t, [p_target, p_lower_bound]] + delta_p_trajectories))
+        np.concatenate([reference_delta_p_t, p_target_rows, p_lower_bound_rows] + delta_p_trajectories))
     full_v_low, full_v_high = _padded_bounds(
         np.concatenate([t["voltage_v"].to_numpy(float) for t in full_traces]))
     full_i_low, full_i_high = _padded_bounds(
@@ -219,8 +228,8 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
         measured_delta_p_t = delta_p_trajectories[frame]
         ax_p.plot(reference_time, reference_delta_p_t, "k--", linewidth=1.2, label="linear rise delta_P(t)")
         ax_p.plot(time_s, measured_delta_p_t, color="tab:blue", linewidth=2, label="measured delta_P(t)")
-        ax_p.axhline(p_target, color="k", linestyle=":", linewidth=1, label="target delta_P")
-        ax_p.axhline(p_lower_bound, color="tab:red", linestyle="--", linewidth=1.2,
+        ax_p.axhline(p_target_rows[frame], color="k", linestyle=":", linewidth=1, label="target delta_P")
+        ax_p.axhline(p_lower_bound_rows[frame], color="tab:red", linestyle="--", linewidth=1.2,
                      label="BO feasibility boundary")
         ax_p.set(title="Change of polarization", xlabel="Rise time (s)", ylabel="delta_P (C/m^2)")
         ax_p.set_xlim(reference_time[0], reference_time[-1])
@@ -252,9 +261,11 @@ def make_video(history_path: Path, output_path: Path, area_m2: float,
         ax_work.grid(True, alpha=0.3)
         ax_work.legend(handles=work_legend_handles, loc="upper right", fontsize=10, ncol=2)
 
-        ax_delta_p_history.axhline(p_target, color="k", linestyle=":", linewidth=1.4, label="target delta_P")
-        ax_delta_p_history.axhline(p_lower_bound, color="tab:red", linestyle="--", linewidth=1.6,
-                                   label="BO feasibility boundary")
+        evaluations = history["evaluation"].to_numpy(float)
+        ax_delta_p_history.plot(evaluations, p_target_rows, color="k", linestyle=":", linewidth=1.4,
+                                label="target delta_P")
+        ax_delta_p_history.plot(evaluations, p_lower_bound_rows, color="tab:red", linestyle="--", linewidth=1.6,
+                                label="BO feasibility boundary")
         delta_p_legend_handles = list(_WORK_PANEL_LEGEND_HANDLES) + [
             Line2D([0], [0], color="k", linestyle=":", linewidth=1.4, label="target delta_P"),
             Line2D([0], [0], color="tab:red", linestyle="--", linewidth=1.6, label="BO feasibility boundary"),

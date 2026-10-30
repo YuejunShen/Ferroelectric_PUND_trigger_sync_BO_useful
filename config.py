@@ -15,8 +15,6 @@ class InstrumentConfig:
     current_channel: int = 1
     voltage_channel: int = 2
     trigger_channel: int = 3
-    # current_input_impedance_ohm: float = 50.0
-    # current_termination_correction: float = 2.0
     voltage_scale_factor: float = 1.0
     current_scale_v_per_div: float = 0.02
     voltage_scale_v_per_div: float = 1
@@ -36,13 +34,7 @@ class DeviceConfig:
     electrode_area_m2: float = (20e-6) ** 2
     current_preamplifier_gain_a_per_v: float = 1.0 / 50.0
     use_current_amplifier: bool = False
-    # The voltage channel measures V_device + I * current_sense_resistor_ohm,
-    # since the current-sense path (through this resistor) shares its node
-    # with the voltage probe. When True, that IR drop is subtracted out to
-    # recover the voltage actually across the ferroelectric device alone --
-    # this corrected voltage is then used everywhere downstream, including
-    # the Work integral. When False (default), voltage_v stays exactly what
-    # the scope measured (device + sense-resistor drop), as before.
+    # True: subtract the sense-resistor IR drop from the measured voltage (used for Work).
     correct_voltage_for_sense_resistor: bool = True
     current_sense_resistor_ohm: float = 50.0
 
@@ -55,37 +47,19 @@ class DeviceConfig:
 class PUNDWaveformConfig:
     sample_rate_hz: float = 10e7
     pulse_width_s: float = 2e-6
-    # Duration of the two BO-shaped positive (P/U) rises.
-    rise_time_s: float = 1e-6
-    # Duration of every other ramp: the reset pulse's rise and fall and the
-    # two positive pulses' falls. None (default) reuses rise_time_s, as before.
-    other_ramp_time_s: float | None = 0.1e-6
+    rise_time_s: float = 1e-6  # tau: the BO-shaped P/U rise
+    other_ramp_time_s: float | None = 0.1e-6  # reset rise/fall and P/U falls; None = rise_time_s
     pre_baseline_s: float = 2e-6
     post_baseline_s: float = 2e-6
     gap1_s: float = 1e-6
     gap2_s: float = 1e-6
-    # Fixed (not BO-controlled) negative reset-pulse voltage: must fully pole
-    # the device regardless of whatever positive rise voltages BO is testing.
-    reset_voltage_v: float = -0.75
-    # Fixed (not BO-controlled) flat-top amplitude of the two positive (P/U)
-    # pulses, independent of reset_voltage_v's magnitude -- the rise is
-    # concatenated directly into this flat top with no forced continuity
-    # (see waveform.build_pund_waveform), so BO is free to shape the approach
-    # without that shape also having to hit this amplitude at its last knot.
-    positive_amplitude_v: float = 0.75
-    # How the BOConfig.rise_points BO variables define the rise V(t):
-    # "points"    -- voltages at evenly spaced times, linearly interpolated.
-    # "bernstein" -- coefficients of a degree (rise_points - 1) Bernstein
-    #                polynomial. V(t) always stays between the smallest and
-    #                largest coefficient, so the BO voltage bounds hold without
-    #                clipping; V(0) is the first and V(end) the last coefficient.
-    #                Evenly spaced coefficients give the same linear ramp as
-    #                "points", so the initial linear rise is identical in both.
-    rise_basis: str = "bernstein"
+    reset_voltage_v: float = -0.7  # fixed, must fully pole the device
+    positive_amplitude_v: float = 0.7  # fixed P/U flat top
+    rise_basis: str = "points"  # "points" (linear interpolation) or "bernstein" (polynomial)
     linear_minimum_voltage_v: float = 0.0
-    linear_maximum_voltage_v: float = 0.75
+    linear_maximum_voltage_v: float = 0.7
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 0.75  # BO upper bound
+    maximum_voltage_v: float = 1.0  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
@@ -98,11 +72,6 @@ class PUNDWaveformConfig:
             raise ValueError(f"Unknown rise_basis {self.rise_basis!r}")
         if self.other_ramp_time_s is not None and self.other_ramp_time_s <= 0.0:
             raise ValueError("other_ramp_time_s must be positive (or None to reuse rise_time_s)")
-        # minimum_voltage_v/linear_minimum_voltage_v may be negative (rise
-        # shapes are free to dip below 0 V; PUND leakage cancellation only
-        # requires both positive pulses share the identical control vector,
-        # regardless of sign) -- bounded symmetrically by safety_max_voltage_v,
-        # same as the positive ceiling, reset_voltage_v, and positive_amplitude_v below.
         allowed_max = max(self.linear_maximum_voltage_v, self.maximum_voltage_v)
         allowed_min = min(self.linear_minimum_voltage_v, self.minimum_voltage_v)
         if (allowed_max > self.safety_max_voltage_v
@@ -119,53 +88,57 @@ class PUNDWaveformConfig:
 
 @dataclass(frozen=True)
 class BOConfig:
-    # Number of voltage knots (or Bernstein coefficients, see
-    # PUNDWaveformConfig.rise_basis) parameterizing the shared rise shape, i.e. the
-    # dimensionality of the BO search space (both positive pulses reuse the
-    # same rise_points-length control vector -- see waveform.build_shaped_rise).
-    rise_points: int = 10
-    initial_random_measurements: int =60
+    # "optimize": minimize Work subject to delta_P >= linear-rise target (constrained EI)
+    # "pareto":   minimize Work and maximize delta_P together, no threshold;
+    #             pick the result from the Pareto front plot at the end
+    # "explore":  map Work and delta_P over the search space, no optimization
+    mode: str = "optimize"
+    rise_points: int = 10  # number of BO voltages describing the rise
+    # linear-rise measurements averaged into the target: the first, the rest at random among the random runs
+    linear_repeats: int = 10
+    initial_random_measurements: int = 30
+    # "uniform": every voltage random in the BO range (average voltage clusters mid-range)
+    # "spread":  random shapes whose average voltages span the whole BO range, more often high, in random order
+    random_design: str = "spread"
     bo_steps: int = 400
-    # Shifts the BO feasibility boundary relative to P_TARGET (the first,
-    # linear-rise evaluation's delta_P), as a fraction of |P_TARGET|:
-    # negative LOOSENS the bound (delta_P may fall below P_TARGET by that
-    # fraction and still be searched as feasible), positive TIGHTENS it,
-    # 0.0 means the search boundary sits exactly at P_TARGET. Does not
-    # affect the "feasible" column, which always reports delta_P >= P_TARGET.
+    # Drift correction: one extra linear rise after every this many BO steps
+    # (added on top of bo_steps); every row is then normalized against the
+    # linear rises measured around it instead of the initial-phase mean.
+    # 0 = off (target fixed by the initial linear repeats).
+    reference_interval: int = 10
+    # Linear rises averaged into each point of the drift reference (centered, in time order)
+    reference_window: int = 5
+    # "optimize": feasibility bound, "pareto": reference delta_P = target * (1 + this)
     p_lower_relative_tolerance: float = 2e-3
     random_seed: int = field(default_factory=lambda: time.time_ns() % (2**32))
     n_restarts: int = 5
     max_iter: int = 100
-    # Xopt GP noise prior. True (default, the September behaviour) assumes
-    # near-noiseless outputs (GammaPrior(1, 100) on the standardized noise),
-    # so the GP passes close to every measurement. False uses a broad prior
-    # that can explain real delta_P differences away as noise -- on BTO_F9 it
-    # made the GP over-predict delta_P for its own proposals (+0.01% predicted
-    # vs -0.62% measured, 20261029 run), so keep True unless testing.
-    use_low_noise_prior: bool = True
-    # None avoids Botorch's Windows threadpoolctl timeout wrapper.
-    max_time_s: float | None = None
-    # "optimize" (default): constrained Expected Improvement, as before --
-    # minimizes Work_NORM subject to the P_lower_NORM feasibility constraint.
-    # "explore": unconstrained Bayesian exploration (BayesianExplorationGenerator).
-    # The P_lower_NORM constraint is dropped entirely and Work_NORM/delta_P_NORM
-    # stop being an objective/observable pair to optimize -- both become equal-
-    # standing EXPLORE targets, and the generator proposes whichever untried
-    # protocol the joint GP over (Work_NORM, delta_P_NORM) is currently least
-    # certain about. The goal isn't a minimum, it's mapping which protocols
-    # (V0..Vn) produce which combinations of Work and delta_P -- feed the
-    # resulting bo_history_*.csv to plot_landscape.py to see that map.
-    mode: str = "optimize"
+    use_low_noise_prior: bool = True  # True: GP assumes near-noiseless data (September behaviour)
+    max_time_s: float | None = None  # None avoids Botorch's Windows threadpoolctl timeout wrapper
 
     def __post_init__(self):
         if self.rise_points < 2:
             raise ValueError("rise_points must be at least 2")
-        if self.mode not in ("optimize", "explore"):
-            raise ValueError(f"mode must be 'optimize' or 'explore', got {self.mode!r}")
+        if self.linear_repeats < 1:
+            raise ValueError("linear_repeats must be at least 1")
+        if self.mode not in ("optimize", "explore", "pareto"):
+            raise ValueError(f"mode must be 'optimize', 'explore' or 'pareto', got {self.mode!r}")
+        if self.random_design not in ("uniform", "spread"):
+            raise ValueError(f"random_design must be 'uniform' or 'spread', got {self.random_design!r}")
+        if self.reference_interval < 0:
+            raise ValueError("reference_interval must be >= 0 (0 = no drift correction)")
+        if self.reference_window < 1:
+            raise ValueError("reference_window must be at least 1")
+
+    @property
+    def reference_measurements(self) -> int:
+        """Linear references interleaved into the BO phase (one after each full block)."""
+        return self.bo_steps // self.reference_interval if self.reference_interval else 0
 
     @property
     def total_measurements(self) -> int:
-        return 1 + self.initial_random_measurements + self.bo_steps
+        return (self.linear_repeats + self.initial_random_measurements + self.bo_steps
+                + self.reference_measurements)
 
 
 @dataclass(frozen=True)
@@ -180,25 +153,15 @@ class ExperimentConfig:
     data_mother_path: Path = field(
         default_factory=lambda: Path(r"D:\Ferroelectric_BTO_optimization") / dt.datetime.now().strftime("%Y%m%d")
     )
-    # Number of full AWG-buffer repeats to capture in one digitize call and
-    # average over in pulse_subtraction.subtract_pund_pulses.
-    scope_capture_periods: int = 1
+    scope_capture_periods: int = 1  # AWG periods captured and averaged per measurement
     output_on_wait_s: float = 0.05
-    # Number of times to apply the initial linear-rise waveform (unmeasured,
-    # unsaved, not fed to BO) before the real measurement loop starts, to let
-    # the device settle into a repeatable switching state. 0 (default) skips
-    # this and starts measuring immediately, as before.
-    warmup_repeats: int = 150
+    # Linear-rise repeats before measuring, to settle the device ("pareto" also uses them as reference)
+    warmup_repeats: int = 100
     enable_control_panel: bool = True
-    # Human-readable tag describing which swept parameter values this run
-    # uses (e.g. "rise_points10_rep2"), set by run_parameter_sweep.py so each
-    # run's output folder self-documents its settings. Empty for a normal,
-    # non-swept run (folder naming is unchanged in that case).
-    sweep_tag: str = ""
+    sweep_tag: str = ""  # set by run_parameter_sweep.py
 
     @property
     def output_directory(self) -> Path:
-        # HHMM from run_timestamp so repeat runs (same device, same day) get their own folder.
         time_of_day = self.run_timestamp.split("_")[1][:4]
         suffix = f"_{self.sweep_tag}" if self.sweep_tag else ""
         return self.data_mother_path / f"BO_pund_rise_{self.device.device_name}_{time_of_day}{suffix}"

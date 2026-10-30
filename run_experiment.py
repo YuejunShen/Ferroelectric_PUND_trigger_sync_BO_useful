@@ -6,13 +6,14 @@ below for every combination."""
 
 import numpy as np
 
-from bo import BayesianRiseOptimizer
+from bo import LINEAR_PHASES, BayesianRiseOptimizer
 from config import ExperimentConfig
 from control_panel import ControlPanel
 from make_evolution_video import default_output_path, make_video
 from measurement import apply_rise_and_measure
 from plot_landscape import plot_landscape
-from storage import append_run_log, save_measurement, save_run_config
+from plot_pareto import plot_pareto
+from storage import append_run_log, rewrite_history_references, save_measurement, save_run_config
 from waveform import rise_voltage
 
 
@@ -46,6 +47,8 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
             measurement.delta_p_c_per_m2,
         )
         save_measurement(measurement, iteration, result, cfg)
+        if result["phase"] in LINEAR_PHASES:
+            rewrite_history_references(cfg, optimizer.data)
         proposed = measurement.proposed_control_voltages_v
         commanded_at_knots = rise_voltage(proposed, np.linspace(0.0, 1.0, proposed.size),
                                           cfg.waveform.rise_basis)
@@ -77,6 +80,13 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
         print(f"Landscape plot saved to {landscape_path}")
     except Exception as exc:
         print(f"Could not generate landscape plot: {exc}")
+
+    if cfg.bo.mode == "pareto":
+        try:
+            pareto_path = plot_pareto(cfg.history_file)
+            print(f"Pareto front plot saved to {pareto_path}")
+        except Exception as exc:
+            print(f"Could not generate Pareto front plot: {exc}")
 
     panel.finish(block=block_on_finish)
     return panel.stop_requested
