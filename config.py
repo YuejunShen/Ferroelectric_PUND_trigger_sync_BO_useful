@@ -53,13 +53,13 @@ class PUNDWaveformConfig:
     post_baseline_s: float = 2e-6
     gap1_s: float = 1e-6
     gap2_s: float = 1e-6
-    reset_voltage_v: float = -0.7  # fixed, must fully pole the device
-    positive_amplitude_v: float = 0.7  # fixed P/U flat top
+    reset_voltage_v: float = -1.2 # fixed, must fully pole the device
+    positive_amplitude_v: float = 1.2  # fixed P/U flat top
     rise_basis: str = "points"  # "points" (linear interpolation) or "bernstein" (polynomial)
     linear_minimum_voltage_v: float = 0.0
-    linear_maximum_voltage_v: float = 0.7
+    linear_maximum_voltage_v: float = 1.2
     minimum_voltage_v: float = 0  # BO lower bound
-    maximum_voltage_v: float = 1.0  # BO upper bound
+    maximum_voltage_v: float = 1.3  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
@@ -100,7 +100,7 @@ class BOConfig:
     # "uniform": every voltage random in the BO range (average voltage clusters mid-range)
     # "spread":  random shapes whose average voltages span the whole BO range, more often high, in random order
     random_design: str = "spread"
-    bo_steps: int = 400
+    bo_steps: int = 250
     # Drift correction: one extra linear rise after every this many BO steps
     # (added on top of bo_steps); every row is then normalized against the
     # linear rises measured around it instead of the initial-phase mean.
@@ -156,7 +156,7 @@ class ExperimentConfig:
     scope_capture_periods: int = 1  # AWG periods captured and averaged per measurement
     output_on_wait_s: float = 0.05
     # Linear-rise repeats before measuring, to settle the device ("pareto" also uses them as reference)
-    warmup_repeats: int = 100
+    warmup_repeats: int = 150
     enable_control_panel: bool = True
     sweep_tag: str = ""  # set by run_parameter_sweep.py
 

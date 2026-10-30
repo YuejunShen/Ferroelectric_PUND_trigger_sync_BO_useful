@@ -1,7 +1,22 @@
 """Live, iteration-by-iteration visualization for the PUND rise-shape BO experiment."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 from waveform import rise_voltage
+
+_executor = None
+
+
+def _worker():
+    """One worker thread reused for the whole process (every run of a sweep).
+    A fresh thread per call made PyTorch start a new OpenMP thread pool each
+    BO step and never free it: ~110 MB and ~13 threads leaked per step, which
+    exhausted memory (76 GB) and hung the PC during the 10/29 overnight sweep."""
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="panel-worker")
+    return _executor
 
 
 class ControlPanel:
@@ -73,25 +88,12 @@ class ControlPanel:
         long measurement or GP fit instead of freezing ("Not Responding")."""
         if not self.enabled:
             return function(*args)
-        import threading
-
-        outcome = {}
-
-        def work():
-            try:
-                outcome["value"] = function(*args)
-            except BaseException as exc:
-                outcome["error"] = exc
-
-        worker = threading.Thread(target=work, daemon=True)
-        worker.start()
-        while worker.is_alive():
+        future = _worker().submit(function, *args)
+        while not future.done():
             # start_event_loop (not plt.pause) so the window is not re-shown
             # or pulled to the front on every tick.
             self.figure.canvas.start_event_loop(0.1)
-        if "error" in outcome:
-            raise outcome["error"]
-        return outcome["value"]
+        return future.result()
 
     def _refresh(self):
         self.figure.tight_layout(pad=3.0)
