@@ -8,9 +8,9 @@ positive pulses share the exact same rise shape, which is required for PUND
 leakage cancellation (subtracting pulse 2 from pulse 1 only isolates the
 switching current if both pulses were driven with an identical stimulus).
 
-The flat top's amplitude is fixed at cfg.positive_amplitude_v, set
-independently of the reset pulse's own (also fixed) cfg.reset_voltage_v --
-independent of wherever the arbitrary rise ends up, too: the rise is
+The flat top's amplitude is fixed at cfg.positive_amplitude_v (the reset
+pulse is its negative, both from cfg.amplitude_v) -- independent of wherever
+the arbitrary rise ends up: the rise is
 concatenated directly into the flat top with no forced continuity, so BO is
 free to shape the approach without that shape also having to hit the target
 amplitude at its last knot.
@@ -129,10 +129,9 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
     if np.any(np.abs(controls) > cfg.safety_max_voltage_v):
         raise ValueError("A rise voltage point exceeds safety_max_voltage_v")
 
-    # Flat-top amplitude is fixed at cfg.positive_amplitude_v, set independently
-    # of cfg.reset_voltage_v -- and independent of the arbitrary rise's own
-    # endpoint (controls[-1]), which is concatenated directly into it with no
-    # forced continuity.
+    # Flat-top amplitude is fixed at cfg.positive_amplitude_v, independent of
+    # the arbitrary rise's own endpoint (controls[-1]), which is concatenated
+    # directly into it with no forced continuity.
     positive_amplitude = cfg.positive_amplitude_v
     shaped_rise = build_shaped_rise(controls, cfg.rise_time_s, cfg.sample_rate_hz, cfg.rise_basis)
     flat_top = _constant(positive_amplitude, cfg.pulse_width_s, cfg.sample_rate_hz)

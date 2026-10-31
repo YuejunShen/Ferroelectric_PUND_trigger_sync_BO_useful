@@ -38,6 +38,9 @@ def work_ratio_for_run(output_directory: Path) -> float | None:
     history = pd.read_csv(history_files[0])
     if history.empty or "Work" not in history:
         return None
+    if "phase" in history:
+        # Post-BO re-measurements (bo.CONFIRMATION_PHASES) are not BO results.
+        history = history[~history["phase"].astype(str).str.startswith("confirmation")]
     linear_rows = history[history["phase"] == "linear rise"] if "phase" in history else history.iloc[:0]
     linear_work = (linear_rows["Work"].mean() if not linear_rows.empty
                    else history.sort_values("evaluation")["Work"].iloc[0])

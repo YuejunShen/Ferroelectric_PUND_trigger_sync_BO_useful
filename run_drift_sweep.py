@@ -3,27 +3,24 @@ a fixed wait between settings. Edit SWEEP / WAIT_BETWEEN_SETTINGS_S below,
 then run this file.
 
 SWEEP keys are dotted paths, same as run_parameter_sweep.py:
-  - any ExperimentConfig field, e.g. "waveform.positive_amplitude_v"
+  - any ExperimentConfig field, e.g. "waveform.amplitude_v"
   - any drift-protocol field (run_drift_test.DriftProtocol) as "drift.<field>",
     e.g. "drift.intra_batch_delay_s"
 A list means "sweep over these values" (every combination of all list-valued
 entries is run); a bare value overrides that field for every run. Anything
 not in SWEEP keeps its default from config.py / run_drift_test.py.
 
-Example: drift tests at three flat-top/ramp-end voltages, 30 min apart:
+Example: drift tests at three amplitudes (flat top, reset pulse and linear
+rise end all follow waveform.amplitude_v), 30 min apart:
 
     SWEEP = {
-        "waveform.positive_amplitude_v": [0.4, 0.5, 0.6],
-        "waveform.linear_maximum_voltage_v": 0.5,
+        "waveform.amplitude_v": [0.4, 0.5, 0.6],
     }
     WAIT_BETWEEN_SETTINGS_S = 1800
 
 Each setting is one complete run_drift_once() (all batches + rests) in its
 own subfolder of SWEEP_FOLDER, named after its values (e.g.
-"..._positive_amplitude_v0.4"). With MATCH_RESET_TO_POSITIVE /
-MATCH_RAMP_TO_POSITIVE, the reset pulse (-positive_amplitude_v) and the end of
-the linear rise (+positive_amplitude_v) follow the swept amplitude, overriding
-reset_voltage_v / linear_maximum_voltage_v from config.py.
+"..._amplitude_v0.4").
 The AWG output is off during the wait.
 "Stop safely" or Ctrl+C (during a run or during the wait) ends the sweep.
 """
@@ -39,7 +36,7 @@ from waveform import build_pund_waveform
 
 # Dotted-path overrides; see the module docstring.
 SWEEP = {
-    "waveform.positive_amplitude_v": [0.5,0.75,1],
+    "waveform.amplitude_v": [0.5,0.75,1],
 }
 # How many times to repeat each combination. Repeats are the outer loop: the
 # whole list of settings runs once, then again, etc.
@@ -50,15 +47,6 @@ WAIT_BETWEEN_SETTINGS_S: float = 3600*2
 # True: also wait WAIT_BETWEEN_SETTINGS_S before the FIRST setting (e.g. to let
 # the device rest after whatever ran before this sweep). False: start at once.
 WAIT_BEFORE_FIRST: bool = False
-# True: each setting's reset pulse is -positive_amplitude_v (same magnitude as
-# the P/U pulses), unless "waveform.reset_voltage_v" is given in SWEEP itself.
-# False: reset_voltage_v keeps its config.py value.
-MATCH_RESET_TO_POSITIVE: bool = True
-# True: each setting's linear P/U rise ramps 0 -> positive_amplitude_v, so it
-# meets the flat top with no jump, unless "waveform.linear_maximum_voltage_v"
-# is given in SWEEP itself. False: the ramp ends at config.py's
-# linear_maximum_voltage_v regardless of the amplitude.
-MATCH_RAMP_TO_POSITIVE: bool = True
 SWEEP_NAME = "drift_sweep"
 SWEEP_FOLDER = ExperimentConfig().data_mother_path / SWEEP_NAME
 
@@ -80,11 +68,6 @@ def _build(combo: dict, repeat: int) -> tuple[ExperimentConfig, DriftProtocol]:
             protocol = _set_nested(protocol, dotted_path[len(DRIFT_PREFIX):], value)
         else:
             cfg = _set_nested(cfg, dotted_path, value)
-    amplitude = cfg.waveform.positive_amplitude_v
-    if MATCH_RESET_TO_POSITIVE and "waveform.reset_voltage_v" not in combo:
-        cfg = _set_nested(cfg, "waveform.reset_voltage_v", -amplitude)
-    if MATCH_RAMP_TO_POSITIVE and "waveform.linear_maximum_voltage_v" not in combo:
-        cfg = _set_nested(cfg, "waveform.linear_maximum_voltage_v", amplitude)
     cfg = dataclasses.replace(cfg, sweep_tag=_label(combo, repeat))
     return cfg, protocol
 

@@ -24,12 +24,14 @@ DATA_FOLDER: Path | None = Path(r"D:\Ferroelectric_BTO_optimization\20260821\BO_
 
 # Marker shape encodes which phase an evaluation belongs to; color encodes
 # feasibility (independent of phase) -- see the work-vs-reference panel.
-_PHASE_MARKERS = {"linear rise": "s", "linear reference": "s", "random initial": "x", "BO optimization": "o"}
+_PHASE_MARKERS = {"linear rise": "s", "linear reference": "s", "random initial": "x", "BO optimization": "o",
+                  "confirmation reference": "s", "confirmation": "D"}
 _FEASIBLE_COLORS = {True: "tab:green", False: "tab:red"}
 _WORK_PANEL_LEGEND_HANDLES = [
     Line2D([0], [0], marker="s", linestyle="None", markerfacecolor="none", markeredgecolor="k", label="linear rise"),
     Line2D([0], [0], marker="x", linestyle="None", color="k", label="random initial"),
     Line2D([0], [0], marker="o", linestyle="None", markerfacecolor="none", markeredgecolor="k", label="BO optimization"),
+    Line2D([0], [0], marker="D", linestyle="None", markerfacecolor="none", markeredgecolor="k", label="confirmation"),
     Line2D([0], [0], marker="o", linestyle="None", color=_FEASIBLE_COLORS[True], label="feasible"),
     Line2D([0], [0], marker="o", linestyle="None", color=_FEASIBLE_COLORS[False], label="infeasible"),
 ]
@@ -347,7 +349,7 @@ def main():
     run_config = load_run_config(history_path)
     if run_config is not None:
         area_m2 = float(run_config["device"]["electrode_area_m2"])
-        waveform_cfg = PUNDWaveformConfig(**run_config["waveform"])
+        waveform_cfg = PUNDWaveformConfig.from_saved(run_config["waveform"])
     else:
         area_m2 = cfg.device.electrode_area_m2
         waveform_cfg = cfg.waveform

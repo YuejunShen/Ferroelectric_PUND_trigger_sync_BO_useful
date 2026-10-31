@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from config import ExperimentConfig
 from measurement import Measurement
@@ -124,7 +125,9 @@ def save_measurement(measurement: Measurement, iteration: int, result: dict, cfg
                              "Work", "Work_NORM", "delta_P", "delta_P_NORM",
                              "P_target", "P_lower_bound", "P_violation", "P_lower", "P_lower_NORM",
                              "P_SCALE", "WORK_SCALE",
-                             "feasible", "phase", "phase_evaluation"])
+                             "feasible", "phase", "phase_evaluation",
+                             # Confirmation phase only: which top protocol (1 = BO's best).
+                             "candidate"])
         writer.writerow([iteration, trace_path.name, rise_path.name,
                          *measurement.proposed_control_voltages_v,
                          *measurement.measured_control_voltages_v,
@@ -133,7 +136,14 @@ def save_measurement(measurement: Measurement, iteration: int, result: dict, cfg
                          result["P_lower_bound"], result["P_violation"], result["P_lower"], result["P_lower_NORM"],
                          result["P_SCALE"], result["WORK_SCALE"],
                          result["feasible"], result["phase"],
-                         result["phase_evaluation"]])
+                         result["phase_evaluation"],
+                         "" if pd.isna(result.get("candidate")) else int(result["candidate"])])
+
+
+def save_confirmation_summary(cfg: ExperimentConfig, summary) -> Path:
+    path = cfg.output_directory / f"confirm_summary_{cfg.run_timestamp}.csv"
+    summary.to_csv(path, index=False)
+    return path
 
 
 # History columns that depend on the linear-rise reference, not just on the row's own measurement.

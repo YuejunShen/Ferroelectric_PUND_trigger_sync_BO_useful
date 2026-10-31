@@ -224,7 +224,7 @@ def make_drift_video(log_path: Path, rests_path: Path | None, output_path: Path,
     run_config = load_run_config(log_path)
     if run_config is not None:
         if waveform_cfg is None:
-            waveform_cfg = PUNDWaveformConfig(**run_config["waveform"])
+            waveform_cfg = PUNDWaveformConfig.from_saved(run_config["waveform"])
         periods = int(run_config["scope_capture_periods"])
     elif waveform_cfg is None:
         waveform_cfg = PUNDWaveformConfig()

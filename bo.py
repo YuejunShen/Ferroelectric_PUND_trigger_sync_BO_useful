@@ -33,8 +33,13 @@ if sys.platform == "win32" and xopt is not None:
     _botorch_timeout.threadpool_limits = lambda *args, **kwargs: nullcontext()
 
 # "linear rise": the initial-phase repeats; "linear reference": the drift
-# references interleaved into the BO phase (BOConfig.reference_interval).
-LINEAR_PHASES = ("linear rise", "linear reference")
+# references interleaved into the BO phase (BOConfig.reference_interval);
+# "confirmation reference": one per round of the confirmation phase.
+LINEAR_PHASES = ("linear rise", "linear reference", "confirmation reference")
+# After BO: the top protocols re-measured ("confirmation", see
+# BOConfig.confirm_top) plus their linear references. Not part of the BO
+# result itself -- the plot scripts leave these rows out of "best BO row".
+CONFIRMATION_PHASES = ("confirmation", "confirmation reference")
 
 
 @dataclass
@@ -54,6 +59,9 @@ class BayesianRiseOptimizer:
     # True where an initial-phase evaluation is a linear rise: evaluation 0,
     # plus linear_repeats - 1 random slots among the random measurements.
     _linear_slots: np.ndarray = field(init=False, repr=False)
+    # BO-phase evaluations measured as extra random shapes because no row met
+    # the delta_P constraint yet (see propose).
+    _extra_random: set = field(default_factory=set, init=False, repr=False)
     # (evaluation index, Work, delta_P) of the linear-rise reference; see _fit_reference.
     _reference: tuple | None = field(default=None, init=False, repr=False)
 
@@ -138,6 +146,20 @@ class BayesianRiseOptimizer:
             return self._rng.uniform(low, high, self.bo_cfg.rise_points)
         if self._is_reference(count):
             return self._linear_shape()
+        if self.bo_cfg.mode == "optimize" and not self._has_feasible():
+            # Constrained EI needs at least one feasible row; Xopt raises otherwise.
+            if len(self._extra_random) >= self.bo_cfg.max_extra_random_measurements:
+                raise RuntimeError(
+                    f"No measurement met the delta_P constraint after "
+                    f"{len(self._extra_random)} extra random shapes "
+                    "(BOConfig.max_extra_random_measurements)")
+            self._extra_random.add(count)
+            print(f"No feasible point yet -- extra random measurement "
+                  f"{len(self._extra_random)}/{self.bo_cfg.max_extra_random_measurements}")
+            if self.bo_cfg.random_design == "spread":
+                # Same level distribution as the spread design, denser toward high voltage.
+                return self._shape_with_mean(low + (high - low) * np.sqrt(self._rng.uniform()), low, high)
+            return self._rng.uniform(low, high, self.bo_cfg.rise_points)
         inputs = self._generator.generate(1)[0]
         return np.array([inputs[name] for name in self.input_names], dtype=float)
 
@@ -155,8 +177,11 @@ class BayesianRiseOptimizer:
         if self._spread_means_v is None:
             levels = low + (high - low) * np.sqrt((np.arange(n_random) + 0.5) / n_random)
             self._spread_means_v = self._rng.permutation(levels)
-        target = self._spread_means_v[index]
-        deviation = self._rng.uniform(low, high, self.bo_cfg.rise_points)
+        return self._shape_with_mean(self._spread_means_v[index], low, high)
+
+    def _shape_with_mean(self, target, low, high):
+        """Random shape with average voltage exactly target (see _spread_shape)."""
+        deviation =self._rng.uniform(low, high, self.bo_cfg.rise_points)
         deviation -= deviation.mean()
         room_up = (high - target) / deviation.max() if deviation.max() > 0 else np.inf
         room_down = (target - low) / -deviation.min() if deviation.min() < 0 else np.inf
@@ -185,17 +210,14 @@ class BayesianRiseOptimizer:
             phase = "random initial"
             phase_evaluation = int(np.count_nonzero(~self._linear_slots[:evaluation])) + 1
         else:
-            phase = "linear reference" if self._is_reference(evaluation) else "BO optimization"
+            if self._is_reference(evaluation):
+                phase = "linear reference"
+            elif evaluation in self._extra_random:
+                phase = "random initial"
+            else:
+                phase = "BO optimization"
             phase_evaluation = int(np.count_nonzero(self.data["phase"] == phase)) + 1
-        row = dict(zip(self.input_names, protocol))
-        row.update({"Work": float(work_j), "delta_P": float(delta_p_c_per_m2),
-                    "phase": phase, "phase_evaluation": phase_evaluation})
-        self.data = pd.concat([self.data, pd.DataFrame([row], index=[evaluation])])
-        if phase in LINEAR_PHASES:
-            self._fit_reference()
-        # A new linear rise moves the reference of earlier rows too, so every
-        # row is renormalized; between linear rises this changes only the new one.
-        self.data = self._normalized(self.data)
+        self._append(protocol, work_j, delta_p_c_per_m2, phase, phase_evaluation)
         if evaluation == n_initial - 1 or phase == "linear reference":
             # Initial phase over, or the drift reference just moved: hand
             # every (re)normalized row to a fresh generator.
@@ -204,6 +226,92 @@ class BayesianRiseOptimizer:
         elif evaluation >= n_initial:
             self._generator.add_data(self.data.loc[[evaluation]])
         return self.data.loc[evaluation].to_dict()
+
+    def _append(self, protocol, work_j, delta_p_c_per_m2, phase, phase_evaluation, candidate=None):
+        evaluation = len(self.data)
+        row = dict(zip(self.input_names, protocol))
+        row.update({"Work": float(work_j), "delta_P": float(delta_p_c_per_m2),
+                    "phase": phase, "phase_evaluation": phase_evaluation, "candidate": candidate})
+        self.data = pd.concat([self.data, pd.DataFrame([row], index=[evaluation])])
+        if phase in LINEAR_PHASES:
+            self._fit_reference()
+        # A new linear rise moves the reference of earlier rows too, so every
+        # row is renormalized; between linear rises this changes only the new one.
+        self.data = self._normalized(self.data)
+
+    def confirmation_candidates(self):
+        """The confirm_top lowest-Work_NORM distinct protocols that meet the
+        BO delta_P constraint (linear rises excluded), best first, numbered
+        1, 2, ... in a "candidate" column; "source_evaluation" is the row
+        each came from."""
+        rows = self.data[~self.data["phase"].isin(LINEAR_PHASES + CONFIRMATION_PHASES)
+                         & (self.data["P_lower_NORM"] >= self.p_lower_norm_threshold)]
+        rows = rows.sort_values("Work_NORM")
+        rows = rows[~rows[self.input_names].round(6).duplicated()].head(self.bo_cfg.confirm_top)
+        return rows.assign(source_evaluation=rows.index,
+                           candidate=np.arange(1, len(rows) + 1)).reset_index(drop=True)
+
+    def confirmation_plan(self, candidates):
+        """(protocol, candidate number or None for a linear rise) in measuring
+        order: confirm_repeats rounds of one linear rise plus every candidate
+        in a freshly shuffled order (so neither drift nor what was applied just
+        before favors one candidate), then a closing linear rise so the last
+        round has a reference on both sides."""
+        protocols = candidates[self.input_names].to_numpy(dtype=float)
+        plan = []
+        for _ in range(self.bo_cfg.confirm_repeats):
+            plan.append((self._linear_shape(), None))
+            for index in self._rng.permutation(len(candidates)):
+                plan.append((protocols[index], int(candidates["candidate"].iloc[index])))
+        plan.append((self._linear_shape(), None))
+        return plan
+
+    def observe_confirmation(self, proposed_voltages_v, work_j, delta_p_c_per_m2, candidate):
+        """Record one confirmation-phase measurement (candidate None: its
+        linear reference). The BO generator is not updated any more."""
+        phase = "confirmation reference" if candidate is None else "confirmation"
+        phase_evaluation = int(np.count_nonzero(self.data["phase"] == phase)) + 1
+        self._append(np.asarray(proposed_voltages_v, dtype=float), work_j, delta_p_c_per_m2,
+                     phase, phase_evaluation, candidate)
+        return self.data.iloc[-1].to_dict()
+
+    def confirmation_summary(self, candidates):
+        """One row per candidate: its single BO measurement next to the mean
+        and spread of its confirmation repeats, ranked best first -- lowest
+        mean Work_NORM among candidates whose mean delta_P_NORM reaches the
+        target (1.0), then the ones that do not. Renormalized against the
+        final reference, so call it after the last measurement."""
+        repeats = self.data[self.data["phase"] == "confirmation"]
+        repeats = repeats.assign(candidate=repeats["candidate"].astype(int))
+        source = self.data.loc[candidates["source_evaluation"]]
+        summary = candidates[["candidate", "source_evaluation", *self.input_names]].assign(
+            bo_Work_NORM=source["Work_NORM"].to_numpy(),
+            bo_delta_P_NORM=source["delta_P_NORM"].to_numpy())
+        grouped = repeats.groupby("candidate")
+        stats = pd.DataFrame({
+            "n": grouped.size(),
+            "Work_NORM_mean": grouped["Work_NORM"].mean(),
+            "Work_NORM_std": grouped["Work_NORM"].std(),
+            "delta_P_NORM_mean": grouped["delta_P_NORM"].mean(),
+            "delta_P_NORM_std": grouped["delta_P_NORM"].std(),
+            "feasible_fraction": grouped["feasible"].mean(),
+        })
+        summary = summary.join(stats, on="candidate")
+        summary["Work_NORM_sem"] = summary["Work_NORM_std"] / np.sqrt(summary["n"])
+        summary["work_reduction_pct"] = 100.0 * (1.0 - summary["Work_NORM_mean"])
+        summary["meets_target"] = summary["delta_P_NORM_mean"] >= 1.0
+        summary = summary.sort_values(["meets_target", "Work_NORM_mean"], ascending=[False, True])
+        return summary.assign(rank=np.arange(1, len(summary) + 1)).reset_index(drop=True)
+
+    @property
+    def extra_random_measurements(self):
+        """Extra random shapes measured so far (on top of BOConfig.total_measurements)."""
+        return len(self._extra_random)
+
+    def _has_feasible(self):
+        """True if any row meets the BO delta_P constraint, by Xopt's own rule
+        (P_lower_NORM >= p_lower_norm_threshold)."""
+        return bool((self.data["P_lower_NORM"] >= self.p_lower_norm_threshold).any())
 
     def _fit_reference(self):
         """Linear-rise reference Work and delta_P (P_TARGET) as a function of

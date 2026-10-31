@@ -1,5 +1,6 @@
 """Configuration for the PUND rise-shape optimization experiment."""
 
+import dataclasses
 from dataclasses import dataclass, field
 import datetime as dt
 import time
@@ -53,21 +54,20 @@ class PUNDWaveformConfig:
     post_baseline_s: float = 2e-6
     gap1_s: float = 1e-6
     gap2_s: float = 1e-6
-    reset_voltage_v: float = -1.2 # fixed, must fully pole the device
-    positive_amplitude_v: float = 1.2  # fixed P/U flat top
+    # One amplitude for the whole PUND: the P/U flat top (+), the reset pulse
+    # (-), and the end of the linear reference rise (+) -- see the properties
+    # below. Must fully pole the device.
+    amplitude_v: float = 1.2
     rise_basis: str = "points"  # "points" (linear interpolation) or "bernstein" (polynomial)
     linear_minimum_voltage_v: float = 0.0
-    linear_maximum_voltage_v: float = 1.2
     minimum_voltage_v: float = 0  # BO lower bound
     maximum_voltage_v: float = 1.3  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
 
     def __post_init__(self):
-        if self.reset_voltage_v >= 0.0:
-            raise ValueError("reset_voltage_v must be negative")
-        if self.positive_amplitude_v <= 0.0:
-            raise ValueError("positive_amplitude_v must be positive")
+        if self.amplitude_v <= 0.0:
+            raise ValueError("amplitude_v must be positive")
         if self.rise_basis not in ("points", "bernstein"):
             raise ValueError(f"Unknown rise_basis {self.rise_basis!r}")
         if self.other_ramp_time_s is not None and self.other_ramp_time_s <= 0.0:
@@ -79,6 +79,33 @@ class PUNDWaveformConfig:
                 or -self.reset_voltage_v > self.safety_max_voltage_v
                 or self.positive_amplitude_v > self.safety_max_voltage_v):
             raise ValueError("linear/BO/reset/positive-amplitude voltage exceeds safety_max_voltage_v")
+
+    @classmethod
+    def from_saved(cls, saved: dict) -> "PUNDWaveformConfig":
+        """Rebuild from a run_config_*.json "waveform" entry. Older runs saved
+        positive_amplitude_v / reset_voltage_v / linear_maximum_voltage_v
+        separately; positive_amplitude_v becomes amplitude_v and the other
+        two are dropped (the replot scripts only need the timing)."""
+        saved = dict(saved)
+        if "positive_amplitude_v" in saved:
+            saved.setdefault("amplitude_v", saved["positive_amplitude_v"])
+        names = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in saved.items() if key in names})
+
+    @property
+    def positive_amplitude_v(self) -> float:
+        """P/U flat top."""
+        return self.amplitude_v
+
+    @property
+    def reset_voltage_v(self) -> float:
+        """Reset pulse (negative)."""
+        return -self.amplitude_v
+
+    @property
+    def linear_maximum_voltage_v(self) -> float:
+        """End of the linear reference rise, so it meets the flat top with no jump."""
+        return self.amplitude_v
 
     @property
     def other_ramp_s(self) -> float:
@@ -100,7 +127,19 @@ class BOConfig:
     # "uniform": every voltage random in the BO range (average voltage clusters mid-range)
     # "spread":  random shapes whose average voltages span the whole BO range, more often high, in random order
     random_design: str = "spread"
+    # "optimize": while no row meets the delta_P constraint, Xopt cannot run
+    # constrained EI, so BO measures extra random shapes (logged as "random
+    # initial", added on top of bo_steps) until one does. This many at most,
+    # then the run stops with an error.
+    max_extra_random_measurements: int = 300
     bo_steps: int = 250
+    # "optimize": after the BO steps, re-measure the confirm_top best distinct
+    # feasible protocols confirm_repeats times each (one linear reference per
+    # round, candidates in shuffled order) and rank them by mean Work -- a
+    # single noisy measurement's minimum is biased low. Adds
+    # confirm_repeats * (confirm_top + 1) + 1 measurements. 0 = skip.
+    confirm_top: int = 3
+    confirm_repeats: int = 10
     # Drift correction: one extra linear rise after every this many BO steps
     # (added on top of bo_steps); every row is then normalized against the
     # linear rises measured around it instead of the initial-phase mean.
@@ -125,6 +164,10 @@ class BOConfig:
             raise ValueError(f"mode must be 'optimize', 'explore' or 'pareto', got {self.mode!r}")
         if self.random_design not in ("uniform", "spread"):
             raise ValueError(f"random_design must be 'uniform' or 'spread', got {self.random_design!r}")
+        if self.max_extra_random_measurements < 0:
+            raise ValueError("max_extra_random_measurements must be >= 0")
+        if self.confirm_top < 0 or self.confirm_repeats < 1:
+            raise ValueError("confirm_top must be >= 0 and confirm_repeats >= 1")
         if self.reference_interval < 0:
             raise ValueError("reference_interval must be >= 0 (0 = no drift correction)")
         if self.reference_window < 1:

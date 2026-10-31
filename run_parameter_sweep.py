@@ -23,30 +23,45 @@ import dataclasses
 import itertools
 from pathlib import Path
 
+import numpy as np
+
 from config import ExperimentConfig
 from plot_sweep_convergence import plot_convergence
+from plot_sweep_results import summarize_sweep
 from run_experiment import run_once
 from storage import RUN_LOG_PATH
+from waveform import build_pund_waveform
 
 # Dotted-path config overrides. A list means "sweep over these values"; a
 # bare (non-list) value overrides that field but does not multiply the
 # number of runs.
 SWEEP = {
-    "bo.rise_points": [12,10,8,6,4],
-    # Compare both rise discretizations (see PUNDWaveformConfig.rise_basis);
-    # the convergence plot draws one curve per basis. Use a single-item list
-    # (or a bare string) to run only one.
-    "waveform.rise_basis": ["points", "bernstein"],
+    # Fixed: 6 Bernstein points won the 10/30 rise_points x rise_basis scan.
+    "bo.rise_points": 6,
+    "waveform.rise_basis": "bernstein",
+    "waveform.rise_time_s": [0.8e-6, 1e-6, 1.2e-6],
+    # Sets the P/U flat top, the reset pulse and the linear rise's end together.
+    "waveform.amplitude_v": [1.0, 1.2],
 }
 # How many times to repeat *each* combination of the values above (e.g. to
 # average out BO's random_seed / measurement noise for a convergence test).
-REPEATS = 3
+REPEATS = 10
+# Not None: each run's BO upper bound (maximum_voltage_v) is amplitude_v +
+# this, unless "waveform.maximum_voltage_v" is given in SWEEP itself (0.1
+# reproduces config.py's 1.2 V -> 1.3 V). None: config.py's value.
+BO_MAX_ABOVE_POSITIVE_V: float | None = 0.25
 # Every run in this sweep is grouped under one subfolder of today's usual
 # data_mother_path (config.py) -- e.g. D:\Ferroelectric_BTO_optimization\
 # 20260907\rise_points_scan\ -- instead of scattered across separate
 # per-run folders, so the whole sweep and its convergence plot live together.
-SWEEP_NAME = "rise_points_basis_scan"
-SWEEP_FOLDER = ExperimentConfig().data_mother_path / SWEEP_NAME
+SWEEP_NAME = "rise_time_amplitude_scan"
+# Resume a stopped sweep: start at this run number (as printed in
+# "=== Run N/total ===", earlier runs are skipped) and write into the
+# original sweep's folder instead of today's. For a new sweep: START_RUN = 1,
+# RESUME_FOLDER = None.
+START_RUN = 1
+RESUME_FOLDER = None
+SWEEP_FOLDER = RESUME_FOLDER or ExperimentConfig().data_mother_path / SWEEP_NAME
 
 
 def _set_nested(cfg, dotted_path: str, value):
@@ -67,10 +82,25 @@ def _expand(sweep: dict) -> list[dict]:
 
 
 def _label(combo: dict, repeat: int) -> str:
-    parts = [f"{dotted_path.split('.')[-1]}{value}" for dotted_path, value in combo.items()]
+    # Only the swept (list-valued) fields; fixed overrides are in run_config.
+    parts = [f"{dotted_path.split('.')[-1]}{value}" for dotted_path, value in combo.items()
+             if isinstance(SWEEP[dotted_path], list) and len(SWEEP[dotted_path]) > 1]
     if REPEATS > 1:
         parts.append(f"rep{repeat}")
     return "_".join(parts)
+
+
+def _build(combo: dict, repeat: int) -> ExperimentConfig:
+    cfg = ExperimentConfig()
+    # Group every run in this sweep under SWEEP_FOLDER instead of the
+    # day's usual data_mother_path -- see output_directory in config.py.
+    cfg = dataclasses.replace(cfg, data_mother_path=SWEEP_FOLDER)
+    for dotted_path, value in combo.items():
+        cfg = _set_nested(cfg, dotted_path, value)
+    if BO_MAX_ABOVE_POSITIVE_V is not None and "waveform.maximum_voltage_v" not in combo:
+        cfg = _set_nested(cfg, "waveform.maximum_voltage_v",
+                          cfg.waveform.amplitude_v + BO_MAX_ABOVE_POSITIVE_V)
+    return dataclasses.replace(cfg, sweep_tag=_label(combo, repeat))
 
 
 def build_configs():
@@ -80,14 +110,19 @@ def build_configs():
     # combo before moving to the next.
     for repeat in range(1, REPEATS + 1):
         for combo in _expand(SWEEP):
-            cfg = ExperimentConfig()
-            # Group every run in this sweep under SWEEP_FOLDER instead of the
-            # day's usual data_mother_path -- see output_directory in config.py.
-            cfg = dataclasses.replace(cfg, data_mother_path=SWEEP_FOLDER)
-            for dotted_path, value in combo.items():
-                cfg = _set_nested(cfg, dotted_path, value)
-            cfg = dataclasses.replace(cfg, sweep_tag=_label(combo, repeat))
-            yield cfg, combo, repeat
+            yield _build(combo, repeat), combo, repeat
+
+
+def _validate_all() -> None:
+    """Build every run's config and linear-rise waveform up front, so an
+    out-of-range value fails now rather than hours into the sweep. (These
+    configs are discarded -- each run's real one is built right before it
+    starts, so its run_timestamp reflects when it actually ran.)"""
+    for combo in _expand(SWEEP):
+        cfg = _build(combo, repeat=1)
+        linear = np.linspace(cfg.waveform.linear_minimum_voltage_v,
+                             cfg.waveform.linear_maximum_voltage_v, cfg.bo.rise_points)
+        build_pund_waveform(linear, cfg.waveform)
 
 
 def _default_x_column() -> str | None:
@@ -104,9 +139,12 @@ def main() -> None:
     # ExperimentConfig() (and freeze every run_timestamp) up front, before
     # any run actually starts. Iterating the generator directly instead means
     # each cfg (and its run_timestamp) is created right before that run begins.
+    _validate_all()
     total = len(_expand(SWEEP)) * REPEATS
     print(f"Sweep: {total} run(s) total. Output folder: {SWEEP_FOLDER}")
     for index, (cfg, combo, repeat) in enumerate(build_configs(), start=1):
+        if index < START_RUN:
+            continue
         print(f"\n=== Run {index}/{total}: {cfg.sweep_tag} ===")
         stopped = run_once(cfg, sweep_label=cfg.sweep_tag, sweep_overrides=combo,
                             repeat_index=repeat, block_on_finish=False)
@@ -114,6 +152,12 @@ def main() -> None:
             print(f"\nStop requested during run {index}/{total} -- ending sweep "
                   "early instead of starting the next run.")
             break
+
+    try:
+        # Each setting's best run (confirmed protocol) + tables and plots.
+        summarize_sweep(SWEEP_FOLDER)
+    except Exception as exc:
+        print(f"\nCould not summarize the sweep: {exc}")
 
     x_column = _default_x_column()
     if x_column is None:
