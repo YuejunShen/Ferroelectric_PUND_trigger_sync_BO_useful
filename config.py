@@ -200,6 +200,9 @@ class ExperimentConfig:
     output_on_wait_s: float = 0.05
     # Linear-rise repeats before measuring, to settle the device ("pareto" also uses them as reference)
     warmup_repeats: int = 150
+    # True: keep every warm-up measurement (trace/rise CSVs + a Work/delta_P
+    # table) in the run folder's warmup/ subfolder, ~1.2 MB each.
+    save_warmup: bool = True
     enable_control_panel: bool = True
     # True: measurements/BO steps run on a worker thread so the panel stays
     # clickable, but the Tk window then shares the process with a second

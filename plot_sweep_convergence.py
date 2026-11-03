@@ -19,6 +19,7 @@ selection.
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -74,6 +75,13 @@ def plot_convergence(run_log_path: Path, x_column: str = "rise_points",
     log = log.dropna(subset=["work_ratio"])
     if log.empty:
         raise ValueError("No runs had a computable Work ratio (missing/empty bo_history_*.csv?)")
+
+    if x_column not in log:
+        # Not a run-log column (e.g. rise_time_s): take it from each run's sweep overrides.
+        overrides = log["sweep_overrides_json"].fillna("{}").apply(json.loads)
+        log[x_column] = [next((value for key, value in o.items() if key.split(".")[-1] == x_column), np.nan)
+                         for o in overrides]
+        log = log.dropna(subset=[x_column])
 
     # Runs logged before rise_basis existed always used "points". One curve per basis.
     if "rise_basis" not in log:

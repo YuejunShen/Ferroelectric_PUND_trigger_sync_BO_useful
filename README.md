@@ -1,156 +1,158 @@
 # PUND Rise-Shape Bayesian Optimization
 
-Hardware-control software for optimizing the shared voltage-rise shape of a
-PUND pulse pair. The experiment minimizes measured ferroelectric switching
-work while requiring the polarization change to remain at or above a reference
-measurement.
+Instrument-control software that searches for the voltage-rise shape of a PUND
+pulse pair that switches a ferroelectric capacitor with the least work, while
+switching at least as much polarization as a linear rise.
 
 > [!CAUTION]
-> This program controls laboratory instruments and can apply voltage to a
-> connected device. Review the instrument addresses, channel scaling, current
-> conversion, device area, load setting, waveform timing, and voltage limits in
-> `config.py` before enabling an output. First validate the waveform and trigger
-> behavior on an oscilloscope without a device connected.
+> This program drives laboratory instruments and applies voltage to a connected
+> device. Before enabling an output, review in `config.py` the instrument
+> addresses, channel scaling, current gain, electrode area, waveform timing and
+> voltage limits. Validate the waveform and trigger on a scope without a device first.
 
 ## How it works
 
-The arbitrary waveform generator (AWG) produces:
+The AWG (Keysight 33500B series, true ARB mode, `sample_rate_hz`) plays one period:
 
 ```text
-baseline -> negative reset -> gap -> P pulse -> gap -> U pulse -> baseline
+pre-baseline -> reset (-amplitude) -> gap1 -> P pulse -> gap2 -> U pulse -> post-baseline
+P, U pulse = shaped rise (rise_time_s) -> flat top (+amplitude, pulse_width_s) -> linear fall
 ```
 
-The P and U pulses use the same shaped rise. Bayesian optimization selects
-the rise's control values; the pulse plateau and fall remain fixed.
-`PUNDWaveformConfig.rise_basis` sets what those values mean: `"points"`
-(default) treats them as voltage knots joined by straight lines, and
-`"bernstein"` treats them as coefficients of a smooth Bernstein polynomial
-that always stays between the smallest and largest coefficient. The
-scope captures both pulses, and the program subtracts their currents
-(`I_diff = I_P - I_U`) to estimate switching behavior over the rise window.
+- P and U share the identical rise. Only that rise is optimized; the reset,
+  flat tops and falls are fixed (`amplitude_v` sets reset, flat top and the end of the
+  linear reference rise; `other_ramp_time_s` sets the non-optimized ramps).
+- The rise's control values (`BOConfig.rise_points` of them) are, by
+  `rise_basis`, either voltage knots joined linearly (`"points"`) or
+  Bernstein-polynomial coefficients (`"bernstein"`, smooth, bounded by the
+  coefficients). The rise is concatenated straight into the flat top, so its
+  last value does not have to equal the amplitude.
+- The AWG SYNC output triggers the scope (channel 3); its edge is t = 0. The
+  scope averages `average_count` periods. The program subtracts the U current
+  from the P current over the rise window `[rise start, rise start + rise_time_s]`:
+  - **Work** `= ∫ V·(I_P − I_U) dt` — objective, minimized. V has the
+    sense-resistor IR drop removed if `correct_voltage_for_sense_resistor`.
+  - **ΔP** `= ∫ (I_P − I_U) dt / electrode_area_m2` — constraint.
 
-For each proposed shape, the program computes:
+### One run (`run_experiment.run_once`)
 
-- `work_j = integral(V_device * I_diff dt)` (objective, minimized)
-- `delta_p_c_per_m2 = integral(I_diff dt) / electrode_area_m2` (constraint)
+1. **Warm-up:** `warmup_repeats` linear rises to settle the device
+   (saved to `warmup/` if `save_warmup`).
+2. **Initial phase:** `linear_repeats` linear rises (their mean ΔP is the target)
+   mixed with `initial_random_measurements` random shapes (`random_design="spread"`
+   spans the whole voltage range).
+3. **BO phase:** `bo_steps` steps of Xopt constrained Expected Improvement,
+   feasible when ΔP ≥ target × (1 + `p_lower_relative_tolerance`).
+   - **Drift correction:** a linear reference rise is measured every
+     `reference_interval` steps, and each row is normalized against the linear rises
+     around it (`reference_window`).
+   - **No feasible point yet:** extra random shapes are measured, up to
+     `max_extra_random_measurements`.
+4. **Confirmation:** the top `confirm_top` distinct feasible protocols are
+   re-measured `confirm_repeats` times, in shuffled order with one linear reference per round. They are ranked by
+   mean Work in `confirm_summary_*.csv`. This removes the low bias of a single noisy minimum.
+5. **Post-run outputs:** an evolution video and a PCA landscape plot (plus a Pareto plot in `"pareto"` mode).
 
-The first evaluation is a linear reference rise. Its measured `delta_P` sets
-the constraint target. Random initial evaluations are followed by constrained
-Expected Improvement through Xopt.
+`BOConfig.mode`:
 
-## Requirements
-
-- Windows with Python 3.10 or newer
-- A VISA implementation (for example, Keysight IO Libraries Suite or NI-VISA)
-- A VISA-addressable Agilent/Keysight arbitrary waveform generator
-- An Agilent/Keysight Infiniium oscilloscope
-- FFmpeg if MP4 generation is desired
-
-Install the Python packages in an isolated environment:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-The included `run_in_xopt_env.ps1` is machine-specific and expects an existing
-Conda environment at the path declared inside that script. Edit the path or
-run `python run_experiment.py` from your own environment.
-
-## Configure the experiment
-
-All experiment settings live in `config.py`:
-
-1. Set `InstrumentConfig.function_generator_address` and
-   `oscilloscope_address` to the VISA resources on your system.
-2. Verify scope channel assignments, vertical scales, offsets, trigger level,
-   averaging, and time step.
-3. Set `DeviceConfig.device_name`, `electrode_area_m2`, and the current
-   conversion settings. With
-   `correct_voltage_for_sense_resistor = True`, the configured sense-resistor
-   drop is removed before calculating work.
-4. Set `ExperimentConfig.data_mother_path` to the desired output location.
-5. Review waveform timing and all voltage values. The current defaults search
-   from `0` to `1 V`, use a `-0.8 V` reset, and enforce a `1 V` absolute safety
-   ceiling.
-6. Choose the number of rise knots and evaluations in `BOConfig`. The defaults
-   perform 401 measurements: one linear reference, 100 random measurements,
-   and 300 Bayesian-optimization steps.
-
-The configured P and U rises must remain identical for the subtraction to be
-meaningful. Cross-check a saved linear-rise measurement with an independently
-validated PUND analysis before trusting the reported metrics.
-
-## Run
-
-With the hardware connected and the configuration reviewed:
-
-```powershell
-python run_experiment.py
-```
-
-The live control panel displays the measured voltage and subtracted current,
-the optimization history, and the next proposed rise. Set
-`ExperimentConfig.enable_control_panel = False` for headless operation.
-
-Each run receives its own timestamp and output folder. The program saves:
-
-- full captured traces (`trace_*.csv`)
-- rise-window traces (`rise_*.csv`)
-- compact optimization history (`bo_history_*.csv`)
-- the effective run configuration (`run_config_*.json`)
-- an evolution video when a compatible Matplotlib writer is available
-
-The history records both proposed knots (`V0`, `V1`, ...) and scope-measured
-values at the same times (`Measured_V0`, `Measured_V1`, ...), making DAC,
-bandwidth, slew-rate, and cabling differences visible.
-
-Stop the experiment with `Ctrl+C` if the observed waveform or current is
-unexpected. Confirm the instrument output is off before touching the setup.
-
-## Analyze an existing run without hardware
-
-The plotting tools only read saved files and do not communicate with the
-instruments:
-
-```powershell
-python plot_history_traces.py
-python make_evolution_video.py
-```
-
-With no arguments, each script searches beneath `data_mother_path` for the
-newest history file. Target a particular run with either option:
-
-```powershell
-python plot_history_traces.py --history D:\path\to\bo_history_TIMESTAMP.csv
-python make_evolution_video.py --data-folder D:\path\to\run_folder
-```
-
-`plot_history_traces.py` is the quicker feedback loop while changing plot
-layouts. Generate the video after the static figures look correct.
-
-## Project layout
-
-| File | Purpose |
+| Mode | What it does |
 | --- | --- |
-| `run_experiment.py` | Sequential measurement and optimization loop |
-| `config.py` | Instrument, device, waveform, optimizer, and output settings |
-| `waveform.py` | PUND waveform construction and AWG normalization |
-| `instruments.py` | VISA communication, waveform upload, and scope acquisition |
-| `measurement.py` | Applies a proposal and reduces the acquired traces |
-| `pulse_subtraction.py` | Aligns/subtracts P and U pulses and calculates metrics |
-| `bo.py` | Xopt constrained Expected Improvement workflow |
-| `storage.py` | Run configuration, traces, and history persistence |
-| `control_panel.py` | Live experiment visualization |
-| `plot_history_traces.py` | Static post-run plots |
-| `make_evolution_video.py` | Animated optimization history |
+| `"optimize"` | Constrained minimization (the default). |
+| `"pareto"` | Minimizes Work and maximizes ΔP together. |
+| `"explore"` | Maps the space without optimizing. |
 
-## Notes
+Default run: 150 warm-up + 315 BO-run + 41 confirmation measurements, about 40 min.
 
-- The AWG sync output drives the default scope trigger channel. Its positive
-  edge marks the AWG-buffer restart, at the beginning of the pre-baseline.
-- Raw experimental data is intentionally excluded by `.gitignore`; keep it in
-  the configured external data directory.
-- Instrument commands and assumptions are tailored to the equipment used to
-  develop this project. Verify SCPI compatibility before substituting models.
+## Install
+
+Requirements:
+- Windows with Python ≥ 3.10.
+- VISA (Keysight IO Libraries or NI-VISA).
+- A Keysight 33500B-series AWG and an Infiniium scope.
+- FFmpeg, for MP4 videos.
+
+```powershell
+python -m pip install -r requirements.txt   # matplotlib numpy packaging pandas pyvisa xopt
+```
+
+`run_in_xopt_env.ps1` runs `run_experiment.py` in the lab's Conda environment
+(`bto-xopt-latest`); edit its path for another machine.
+
+## Configure (`config.py`)
+
+| Section | Key settings |
+| --- | --- |
+| `InstrumentConfig` | VISA addresses, channels (1 current, 2 voltage, 3 trigger), vertical scales, `average_count`, `scope_time_step_s` |
+| `DeviceConfig` | `device_name`, `electrode_area_m2`, current gain (50 Ω sense), IR-drop correction |
+| `PUNDWaveformConfig` | `sample_rate_hz`, `rise_time_s`, `pulse_width_s`, `gap1_s`/`gap2_s`, baselines, `amplitude_v`, `rise_basis`, BO voltage bounds, `safety_max_voltage_v`, `maximum_arb_points` |
+| `BOConfig` | `mode`, `rise_points`, phase sizes (above), drift reference, confirmation, tolerance, GP options |
+| `ExperimentConfig` | `data_mother_path` (`D:\Ferroelectric_BTO_optimization\<date>`), `warmup_repeats`, `save_warmup`, control panel |
+
+Rules for the settings:
+- Keep `rise_time_s` and every gap a whole number of samples at `sample_rate_hz`
+  (multiples of 10 ns at 100 MSa/s). The waveform is built from rounded sample counts, but the
+  analysis windows use the nominal times, so a fractional sample misaligns U
+  against P and leaves an edge spike in I1−I2.
+- Keep `responsive_control_panel = False` for long unattended sweeps; the
+  worker-thread panel crashed Tk. "Stop safely" still works between measurements.
+
+## Scripts
+
+Each script has its settings at the top; edit them, then run it.
+
+| Script | Purpose |
+| --- | --- |
+| `run_experiment.py` | One BO run with `config.py`. |
+| `run_parameter_sweep.py` | Grid sweep. `SWEEP` maps dotted config paths (e.g. `"waveform.rise_time_s"`) to a value or a list/array of values. Every combination runs `REPEATS` times (repeats as the outer loop) into `<date>\SWEEP_NAME\`. Resume with `START_RUN`/`RESUME_FOLDER`. At the end it calls `summarize_sweep` and the convergence plot. |
+| `run_drift_test.py` | The same linear rise repeated in batches with growing rests, to track Work/ΔP drift and recovery (no BO). |
+| `run_drift_sweep.py` | Several drift tests back to back (`"drift.<field>"` keys allowed), with an output-off wait between them. |
+| `run_relaxation_test.py` | ΔP vs `gap1 = gap2` (reset→P = P→U), after the warm-up. `GAPS_S` (rounded to whole samples) × `ROUNDS`, shuffled per round, with the linear rise or `PROTOCOL_V`. Writes `relaxation_log_*.csv` and `relaxation_delta_p_vs_gap.png`; `--replot <log>` replots. |
+
+Every BO run (single or in a sweep) appends one row to `D:\Ferroelectric_BTO_optimization\run_log.csv`.
+
+## Outputs (per run folder `BO_pund_rise_<device>_<HHMM>[_<sweep tag>]`)
+
+| File | Contents |
+| --- | --- |
+| `run_config_*.json` | Every setting used. |
+| `bo_history_*.csv` | One row per measurement: commanded `V0..Vn`, scope-measured `Measured_V0..Vn`, Work, ΔP, normalized values, feasibility, `phase`, confirmation `candidate`. |
+| `trace_*_iteration_NNN.csv` | Full scope trace: time, current, voltage (used / raw / IR drop). |
+| `rise_*_iteration_NNN.csv` | Rise window, 1000 points: voltage, I1−I2. |
+| `confirm_summary_*.csv` | Ranked confirmed protocols. |
+| `warmup/` | Warm-up traces and the `warmup_*.csv` table. |
+| `*.mp4`, `*_landscape.png` | Evolution video, PCA landscape. |
+
+## Analysis (no hardware needed)
+
+| Script | Output |
+| --- | --- |
+| `plot_sweep_results.py --sweep-folder <folder> [--x … --series …]` | Best confirmed protocol per setting. Writes `sweep_all_runs.csv` and `sweep_best_per_setting.csv`. Plots: Work reduction vs x; absolute Work (log-log with power-law fit, written to `sweep_power_law_fit.csv`) and ΔP vs x; best-protocol V, I1−I2 and P(t) vs time and vs t/τ (20 ns cut at each window end). |
+| `plot_sweep_convergence.py` | Work ratio vs a swept `run_log.csv` column. |
+| `plot_history_traces.py`, `make_evolution_video.py` | All traces of one run, as static plots or video. |
+| `plot_landscape.py` | Work/ΔP on the top-2 principal components of `V0..Vn`. |
+| `plot_pareto.py` | Work vs ΔP with the measured Pareto front. |
+| `plot_drift_test.py` | Drift plot and I1−I2 video from `drift_log_*.csv`. |
+
+The single-run scripts take `--history <bo_history csv>` or `--data-folder <run folder>`; without arguments they use the newest history they find (see each script's `--help`).
+
+## Code layout
+
+| File | Role |
+| --- | --- |
+| `config.py` | All settings (frozen dataclasses). |
+| `waveform.py` | Building the PUND ARB waveform: `build_pund_waveform`, `rise_voltage`, `positive_rise_windows`. |
+| `instruments.py` | AWG upload/output (`ArbGenerator`), scope setup and readout. |
+| `measurement.py` | `apply_rise_and_measure`: upload, capture, align to trigger, subtract, Work/ΔP. |
+| `pulse_subtraction.py` | P−U subtraction on the rise window, Work/ΔP integrals. |
+| `bo.py` | `BayesianRiseOptimizer`: phases, drift reference, Xopt constrained EI, confirmation. |
+| `storage.py` | Run config, history, traces, warm-up, run log. |
+| `control_panel.py` | Live panel with a "Stop safely" button. |
+
+## Known caveats
+
+- **End of the rise window:** the window ends exactly where the AWG steps
+  from the rise's last value to the flat top. The finite edge (about 10–20 ns) leaks into
+  the last points, and into the first points when the rise starts above 0 V.
+  This changes Work by up to about 2 % and ΔP by up to about 0.6 % for non-linear protocols.
+- **Data location:** raw data stays outside the repository (`.gitignore`). The SCPI commands assume
+  the instruments listed above.

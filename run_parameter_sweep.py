@@ -39,13 +39,13 @@ SWEEP = {
     # Fixed: 6 Bernstein points won the 10/30 rise_points x rise_basis scan.
     "bo.rise_points": 6,
     "waveform.rise_basis": "bernstein",
-    "waveform.rise_time_s": [0.8e-6, 1e-6, 1.2e-6],
+    "waveform.rise_time_s": np.logspace(np.log10(0.7e-6), np.log10(10e-6), num=7),
     # Sets the P/U flat top, the reset pulse and the linear rise's end together.
-    "waveform.amplitude_v": [1.0, 1.2],
+    "waveform.amplitude_v": [1.2],
 }
 # How many times to repeat *each* combination of the values above (e.g. to
 # average out BO's random_seed / measurement noise for a convergence test).
-REPEATS = 10
+REPEATS = 5
 # Not None: each run's BO upper bound (maximum_voltage_v) is amplitude_v +
 # this, unless "waveform.maximum_voltage_v" is given in SWEEP itself (0.1
 # reproduces config.py's 1.2 V -> 1.3 V). None: config.py's value.
@@ -74,17 +74,28 @@ def _set_nested(cfg, dotted_path: str, value):
     return dataclasses.replace(cfg, **{head: child})
 
 
+def _values(values) -> list:
+    """A list, tuple or numpy array (e.g. np.logspace(...)) means "sweep over
+    these values" (numpy scalars become plain Python numbers); anything else
+    is one fixed value."""
+    if isinstance(values, (list, tuple, np.ndarray)):
+        return [value.item() if isinstance(value, np.generic) else value for value in values]
+    return [values]
+
+
 def _expand(sweep: dict) -> list[dict]:
     """Cartesian product of every list-valued entry; scalar entries pass through unchanged."""
     keys = list(sweep.keys())
-    axes = [values if isinstance(values, list) else [values] for values in sweep.values()]
+    axes = [_values(values) for values in sweep.values()]
     return [dict(zip(keys, combo)) for combo in itertools.product(*axes)]
 
 
 def _label(combo: dict, repeat: int) -> str:
     # Only the swept (list-valued) fields; fixed overrides are in run_config.
-    parts = [f"{dotted_path.split('.')[-1]}{value}" for dotted_path, value in combo.items()
-             if isinstance(SWEEP[dotted_path], list) and len(SWEEP[dotted_path]) > 1]
+    # 4 significant digits, so np.logspace values give short folder names.
+    parts = [f"{dotted_path.split('.')[-1]}{value:.4g}" if isinstance(value, float)
+             else f"{dotted_path.split('.')[-1]}{value}"
+             for dotted_path, value in combo.items() if len(_values(SWEEP[dotted_path])) > 1]
     if REPEATS > 1:
         parts.append(f"rep{repeat}")
     return "_".join(parts)
@@ -130,7 +141,7 @@ def _default_x_column() -> str | None:
     one key in SWEEP actually varies); None if there's more than one, or none.
     rise_basis is not counted -- the plot already draws one curve per basis."""
     swept_keys = [key for key, values in SWEEP.items()
-                  if isinstance(values, list) and len(values) > 1 and key != "waveform.rise_basis"]
+                  if len(_values(values)) > 1 and key != "waveform.rise_basis"]
     return swept_keys[0].split(".")[-1] if len(swept_keys) == 1 else None
 
 

@@ -14,7 +14,7 @@ from measurement import apply_rise_and_measure
 from plot_landscape import plot_landscape
 from plot_pareto import plot_pareto
 from storage import (append_run_log, rewrite_history_references, save_confirmation_summary,
-                     save_measurement, save_run_config)
+                     save_measurement, save_run_config, save_warmup_measurement)
 from waveform import rise_voltage
 
 
@@ -33,7 +33,9 @@ def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict
     if cfg.warmup_repeats > 0:
         print(f"Applying linear warm-up rise {cfg.warmup_repeats} time(s) before measuring...")
         for warmup in range(1, cfg.warmup_repeats + 1):
-            panel.run_responsive(apply_rise_and_measure, proposed_voltage, cfg)
+            measurement = panel.run_responsive(apply_rise_and_measure, proposed_voltage, cfg)
+            if cfg.save_warmup:
+                save_warmup_measurement(measurement, warmup, cfg)
             panel.set_status(f"Linear warm-up {warmup}/{cfg.warmup_repeats}")
             if panel.stop_requested:
                 print(f"Stop requested -- ending during warm-up ({warmup}/{cfg.warmup_repeats}), "

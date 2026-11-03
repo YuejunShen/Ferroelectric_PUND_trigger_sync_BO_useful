@@ -87,29 +87,8 @@ def save_run_config(cfg: ExperimentConfig) -> None:
 
 
 def save_measurement(measurement: Measurement, iteration: int, result: dict, cfg: ExperimentConfig) -> None:
-    cfg.output_directory.mkdir(parents=True, exist_ok=True)
-    trace_path = cfg.output_directory / (
-        f"trace_{cfg.run_timestamp}_iteration_{iteration:03d}.csv"
-    )
-    with trace_path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        # voltage_v is whichever the run used for analysis (raw or
-        # sense-resistor-corrected); voltage_measured_v/voltage_resistor_v
-        # are always the raw measured voltage and I*R_sense, so the
-        # correction (if any) stays reconstructable from the CSV alone.
-        writer.writerow(["time_s", "current_a", "voltage_v", "voltage_measured_v", "voltage_resistor_v"])
-        writer.writerows(zip(measurement.time_s, measurement.current_a, measurement.voltage_v,
-                             measurement.voltage_measured_v, measurement.voltage_resistor_v))
-    rise_path = cfg.output_directory / (
-        f"rise_{cfg.run_timestamp}_iteration_{iteration:03d}.csv"
-    )
-    with rise_path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["rise_time_s", "rise_voltage_v", "rise_voltage_measured_v",
-                         "rise_voltage_resistor_v", "rise_current_diff_a"])
-        writer.writerows(zip(measurement.rise_time_s, measurement.rise_voltage_v,
-                             measurement.rise_voltage_measured_v, measurement.rise_voltage_resistor_v,
-                             measurement.rise_current_diff_a))
+    trace_path, rise_path = _write_traces(measurement, cfg.output_directory,
+                                          f"{cfg.run_timestamp}_iteration_{iteration:03d}")
     new_file = not cfg.history_file.exists()
     with cfg.history_file.open("a", newline="") as handle:
         writer = csv.writer(handle)
@@ -138,6 +117,53 @@ def save_measurement(measurement: Measurement, iteration: int, result: dict, cfg
                          result["feasible"], result["phase"],
                          result["phase_evaluation"],
                          "" if pd.isna(result.get("candidate")) else int(result["candidate"])])
+
+
+def _write_traces(measurement: Measurement, folder: Path, stem: str, prefix: str = "") -> tuple[Path, Path]:
+    """Full scope trace and PUND-subtracted rise window as
+    <prefix>trace_<stem>.csv and <prefix>rise_<stem>.csv in folder."""
+    folder.mkdir(parents=True, exist_ok=True)
+    trace_path = folder / f"{prefix}trace_{stem}.csv"
+    with trace_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        # voltage_v is whichever the run used for analysis (raw or
+        # sense-resistor-corrected); voltage_measured_v/voltage_resistor_v
+        # are always the raw measured voltage and I*R_sense, so the
+        # correction (if any) stays reconstructable from the CSV alone.
+        writer.writerow(["time_s", "current_a", "voltage_v", "voltage_measured_v", "voltage_resistor_v"])
+        writer.writerows(zip(measurement.time_s, measurement.current_a, measurement.voltage_v,
+                             measurement.voltage_measured_v, measurement.voltage_resistor_v))
+    rise_path = folder / f"{prefix}rise_{stem}.csv"
+    with rise_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["rise_time_s", "rise_voltage_v", "rise_voltage_measured_v",
+                         "rise_voltage_resistor_v", "rise_current_diff_a"])
+        writer.writerows(zip(measurement.rise_time_s, measurement.rise_voltage_v,
+                             measurement.rise_voltage_measured_v, measurement.rise_voltage_resistor_v,
+                             measurement.rise_current_diff_a))
+    return trace_path, rise_path
+
+
+def save_warmup_measurement(measurement: Measurement, index: int, cfg: ExperimentConfig) -> None:
+    """One linear warm-up pulse: its trace/rise CSVs and a row of
+    warmup_<timestamp>.csv (Work, delta_P, measured knots), all in the run
+    folder's warmup/ subfolder. Not part of the BO history."""
+    folder = cfg.output_directory / "warmup"
+    trace_path, rise_path = _write_traces(measurement, folder, f"{cfg.run_timestamp}_{index:03d}",
+                                          prefix="warmup_")
+    table_path = folder / f"warmup_{cfg.run_timestamp}.csv"
+    new_file = not table_path.exists()
+    knots = measurement.measured_control_voltages_v
+    with table_path.open("a", newline="") as handle:
+        writer = csv.writer(handle)
+        if new_file:
+            writer.writerow(["warmup", "logged_at", "trace_file", "rise_file",
+                             *[f"V{i}" for i in range(measurement.proposed_control_voltages_v.size)],
+                             *[f"Measured_V{i}" for i in range(knots.size)], "Work", "delta_P"])
+        writer.writerow([index, dt.datetime.now().isoformat(timespec="seconds"),
+                         trace_path.name, rise_path.name,
+                         *measurement.proposed_control_voltages_v, *knots,
+                         measurement.work_j, measurement.delta_p_c_per_m2])
 
 
 def save_confirmation_summary(cfg: ExperimentConfig, summary) -> Path:
