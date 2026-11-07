@@ -52,6 +52,9 @@ class BayesianRiseOptimizer:
     p_scale: float | None = field(default=None, init=False)
     work_scale: float | None = field(default=None, init=False)
     p_lower_norm_threshold: float | None = field(default=None, init=False)
+    # Fraction of the target that delta_P may fall short by and still count
+    # as reaching it (measurement noise, see _normalized).
+    delta_p_allowance: float = field(default=0.0, init=False)
     _generator: object | None = field(default=None, init=False, repr=False)
     _rng: np.random.Generator = field(init=False, repr=False)
     # random_design="spread": shuffled target average voltages, one per random measurement.
@@ -62,6 +65,9 @@ class BayesianRiseOptimizer:
     # BO-phase evaluations measured as extra random shapes because no row met
     # the delta_P constraint yet (see propose).
     _extra_random: set = field(default_factory=set, init=False, repr=False)
+    # Not None once the extra random shapes ran out with no row meeting the BO
+    # bound: the constraint is lowered to the closest delta_P_NORM reached (see propose).
+    _threshold_cap: float | None = field(default=None, init=False, repr=False)
     # (evaluation index, Work, delta_P) of the linear-rise reference; see _fit_reference.
     _reference: tuple | None = field(default=None, init=False, repr=False)
 
@@ -149,10 +155,9 @@ class BayesianRiseOptimizer:
         if self.bo_cfg.mode == "optimize" and not self._has_feasible():
             # Constrained EI needs at least one feasible row; Xopt raises otherwise.
             if len(self._extra_random) >= self.bo_cfg.max_extra_random_measurements:
-                raise RuntimeError(
-                    f"No measurement met the delta_P constraint after "
-                    f"{len(self._extra_random)} extra random shapes "
-                    "(BOConfig.max_extra_random_measurements)")
+                self._relax_constraint()
+                inputs = self._generator.generate(1)[0]
+                return np.array([inputs[name] for name in self.input_names], dtype=float)
             self._extra_random.add(count)
             print(f"No feasible point yet -- extra random measurement "
                   f"{len(self._extra_random)}/{self.bo_cfg.max_extra_random_measurements}")
@@ -162,6 +167,19 @@ class BayesianRiseOptimizer:
             return self._rng.uniform(low, high, self.bo_cfg.rise_points)
         inputs = self._generator.generate(1)[0]
         return np.array([inputs[name] for name in self.input_names], dtype=float)
+
+    def _relax_constraint(self):
+        """No searched shape met the BO bound even after the extra random
+        shapes (e.g. the linear rise already switches everything): lower the
+        bound to the closest delta_P_NORM reached so far, so constrained EI can
+        run and searches for lower Work at that switching."""
+        searched = self.data[~self.data["phase"].isin(LINEAR_PHASES + CONFIRMATION_PHASES)]
+        self._threshold_cap = float(searched["P_lower_NORM"].max())
+        self.p_lower_norm_threshold = min(self.p_lower_norm_threshold, self._threshold_cap)
+        print(f"No shape met the BO bound after {len(self._extra_random)} extra random shapes -- "
+              f"lowering it to the closest reached, delta_P_NORM >= {self.p_lower_norm_threshold:.5f}")
+        self._make_generator()
+        self._generator.add_data(self.data)
 
     def _spread_shape(self, index, low, high):
         """Random shape whose average voltage is the index-th of N levels
@@ -240,13 +258,22 @@ class BayesianRiseOptimizer:
         self.data = self._normalized(self.data)
 
     def confirmation_candidates(self):
-        """The confirm_top lowest-Work_NORM distinct protocols that meet the
-        BO delta_P constraint (linear rises excluded), best first, numbered
-        1, 2, ... in a "candidate" column; "source_evaluation" is the row
-        each came from."""
-        rows = self.data[~self.data["phase"].isin(LINEAR_PHASES + CONFIRMATION_PHASES)
-                         & (self.data["P_lower_NORM"] >= self.p_lower_norm_threshold)]
-        rows = rows.sort_values("Work_NORM")
+        """Up to confirm_top distinct protocols to re-measure (linear rises
+        excluded), numbered 1, 2, ... in a "candidate" column, with
+        "source_evaluation" (the row each came from) and "selected_by":
+        first those whose delta_P reached the target itself ("feasible",
+        delta_P >= P_target -- not the BO bound, whose tolerance only steers
+        proposals), lowest Work first; if there are fewer than confirm_top,
+        the rest from those below the target only within the measurement
+        noise ("delta_P_ok", see _normalized) that still need less Work than
+        the linear rise, closest to the target first."""
+        rows = self.data[~self.data["phase"].isin(LINEAR_PHASES + CONFIRMATION_PHASES)]
+        feasible = rows["feasible"].astype(bool)
+        reached = rows[feasible].sort_values("Work_NORM").assign(selected_by="delta_P >= target")
+        near = rows[~feasible & rows["delta_P_ok"].astype(bool) & (rows["Work_NORM"] < 1.0)]
+        near = near.sort_values("delta_P_NORM", ascending=False).assign(
+            selected_by=f"within noise below target (<= {100 * self.delta_p_allowance:.3f} %), Work < linear")
+        rows = pd.concat([reached, near])
         rows = rows[~rows[self.input_names].round(6).duplicated()].head(self.bo_cfg.confirm_top)
         return rows.assign(source_evaluation=rows.index,
                            candidate=np.arange(1, len(rows) + 1)).reset_index(drop=True)
@@ -279,12 +306,14 @@ class BayesianRiseOptimizer:
         """One row per candidate: its single BO measurement next to the mean
         and spread of its confirmation repeats, ranked best first -- lowest
         mean Work_NORM among candidates whose mean delta_P_NORM reaches the
-        target (1.0), then the ones that do not. Renormalized against the
-        final reference, so call it after the last measurement."""
+        target minus the measurement noise (1 - delta_p_allowance, the same
+        tolerance as candidate selection), then the ones that do not.
+        Renormalized against the final reference, so call it after the last
+        measurement."""
         repeats = self.data[self.data["phase"] == "confirmation"]
         repeats = repeats.assign(candidate=repeats["candidate"].astype(int))
         source = self.data.loc[candidates["source_evaluation"]]
-        summary = candidates[["candidate", "source_evaluation", *self.input_names]].assign(
+        summary = candidates[["candidate", "source_evaluation", "selected_by", *self.input_names]].assign(
             bo_Work_NORM=source["Work_NORM"].to_numpy(),
             bo_delta_P_NORM=source["delta_P_NORM"].to_numpy())
         grouped = repeats.groupby("candidate")
@@ -299,7 +328,8 @@ class BayesianRiseOptimizer:
         summary = summary.join(stats, on="candidate")
         summary["Work_NORM_sem"] = summary["Work_NORM_std"] / np.sqrt(summary["n"])
         summary["work_reduction_pct"] = 100.0 * (1.0 - summary["Work_NORM_mean"])
-        summary["meets_target"] = summary["delta_P_NORM_mean"] >= 1.0
+        summary["delta_P_NORM_floor"] = 1.0 - self.delta_p_allowance
+        summary["meets_target"] = summary["delta_P_NORM_mean"] >= summary["delta_P_NORM_floor"]
         summary = summary.sort_values(["meets_target", "Work_NORM_mean"], ascending=[False, True])
         return summary.assign(rank=np.arange(1, len(summary) + 1)).reset_index(drop=True)
 
@@ -343,6 +373,8 @@ class BayesianRiseOptimizer:
         self.p_scale = abs(self.p_target) if self.p_target != 0.0 else 1.0
         self.work_scale = abs(work_j) if work_j != 0.0 else 1.0
         self.p_lower_norm_threshold = self.p_lower_bound / self.p_scale
+        if self._threshold_cap is not None:  # lowered by _relax_constraint
+            self.p_lower_norm_threshold = min(self.p_lower_norm_threshold, self._threshold_cap)
 
     def _normalized(self, data):
         """data with every target/normalized column filled in against each
@@ -356,6 +388,11 @@ class BayesianRiseOptimizer:
         p_lower_bound = p_target + self.bo_cfg.p_lower_relative_tolerance * np.abs(p_target)
         delta_p = data["delta_P"].to_numpy(dtype=float)
         delta_p_norm = delta_p / p_scale
+        # Measurement noise: the s.d. of the repeated linear rises' delta_P_NORM
+        # (drift normalized out). Within confirm_noise_sd of it below the target
+        # a row is "delta_P_ok": indistinguishable from reaching it.
+        noise = pd.Series(delta_p_norm[data["phase"].isin(LINEAR_PHASES).to_numpy()]).std()
+        self.delta_p_allowance = self.bo_cfg.confirm_noise_sd * (0.0 if np.isnan(noise) else float(noise))
         return data.assign(
             Work_NORM=data["Work"].to_numpy(dtype=float) / work_scale,
             delta_P_NORM=delta_p_norm,
@@ -372,6 +409,8 @@ class BayesianRiseOptimizer:
             # for (p_lower_bound above), it does not redefine what counts as
             # a successful result for reporting.
             feasible=delta_p >= p_target,
+            P_noise_floor=p_target * (1.0 - self.delta_p_allowance),
+            delta_P_ok=delta_p_norm >= 1.0 - self.delta_p_allowance,
         )
 
 

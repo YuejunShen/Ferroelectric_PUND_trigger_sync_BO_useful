@@ -37,9 +37,10 @@ from waveform import build_pund_waveform
 # number of runs.
 SWEEP = {
     # Fixed: 6 Bernstein points won the 10/30 rise_points x rise_basis scan.
-    "bo.rise_points": 6,
+    "bo.rise_points": 8,
     "waveform.rise_basis": "bernstein",
-    "waveform.rise_time_s": np.logspace(np.log10(0.7e-6), np.log10(10e-6), num=7),
+    # Rounded to 10 ns = whole samples at 100 MSa/s (build_pund_waveform refuses fractions).
+    "waveform.rise_time_s": np.round(np.logspace(np.log10(1e-6), np.log10(10e-6), num=7), 8),
     # Sets the P/U flat top, the reset pulse and the linear rise's end together.
     "waveform.amplitude_v": [1.2],
 }
@@ -61,6 +62,10 @@ SWEEP_NAME = "rise_time_amplitude_scan"
 # RESUME_FOLDER = None.
 START_RUN = 1
 RESUME_FOLDER = None
+# Run numbers to skip because their (complete) run folders are already in
+# SWEEP_FOLDER, e.g. copied over from a stopped sweep with identical settings.
+# For a new sweep: set().
+SKIP_RUNS: set[int] = set()
 SWEEP_FOLDER = RESUME_FOLDER or ExperimentConfig().data_mother_path / SWEEP_NAME
 
 
@@ -153,12 +158,14 @@ def main() -> None:
     _validate_all()
     total = len(_expand(SWEEP)) * REPEATS
     print(f"Sweep: {total} run(s) total. Output folder: {SWEEP_FOLDER}")
+    first = True  # the first run actually started gets the start-of-program warm-up
     for index, (cfg, combo, repeat) in enumerate(build_configs(), start=1):
-        if index < START_RUN:
+        if index < START_RUN or index in SKIP_RUNS:
             continue
         print(f"\n=== Run {index}/{total}: {cfg.sweep_tag} ===")
         stopped = run_once(cfg, sweep_label=cfg.sweep_tag, sweep_overrides=combo,
-                            repeat_index=repeat, block_on_finish=False)
+                            repeat_index=repeat, block_on_finish=False, initial_warmup=first)
+        first = False
         if stopped:
             print(f"\nStop requested during run {index}/{total} -- ending sweep "
                   "early instead of starting the next run.")

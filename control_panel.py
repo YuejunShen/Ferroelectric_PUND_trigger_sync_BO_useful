@@ -120,7 +120,9 @@ class ControlPanel:
 
         self.works.append(float(result["Work"]))
         self.deltas_p.append(float(result["delta_P"]))
-        self.feasible.append(bool(result["feasible"]))
+        # Green: delta_P reached the target, or fell short only within the
+        # measurement noise (bo.py "delta_P_ok", the confirmation-candidate rule).
+        self.feasible.append(bool(result.get("delta_P_ok", result["feasible"])))
         self.ax_history.clear()
         self.ax_charge.clear()
         self.ax_history.yaxis.set_label_position("left")
@@ -133,7 +135,7 @@ class ControlPanel:
         colors = ["tab:green" if value else "tab:red" for value in self.feasible]
         self.ax_history.plot(indices, self.works, color="0.5", linewidth=1)
         self.ax_history.scatter(indices, self.works, c=colors, s=24)
-        self.ax_history.set(title="Work history (green = polarization feasible)",
+        self.ax_history.set(title="Work history (green = delta_P >= target within noise)",
                             xlabel="Evaluation", ylabel="Work = Integral V*I_diff dt (J)")
         self.ax_history.tick_params(axis="y", colors="0.25")
         self.ax_history.grid(True, alpha=0.3)
@@ -141,6 +143,9 @@ class ControlPanel:
                             markersize=3, label="Measured delta_P")
         self.ax_charge.axhline(float(result["P_target"]), color="tab:red",
                                linestyle="--", label="Target delta_P")
+        if "P_noise_floor" in result:
+            self.ax_charge.axhline(float(result["P_noise_floor"]), color="tab:green", linestyle=":",
+                                   label="Target - measurement noise")
         self.ax_charge.set_ylabel("delta_P (C/m^2)", color="tab:purple")
         self.ax_charge.tick_params(axis="y", colors="tab:purple")
         self.ax_charge.legend(loc="lower left")

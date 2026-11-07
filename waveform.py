@@ -128,6 +128,17 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
         raise ValueError("A rise voltage point is outside the configured linear/BO ranges")
     if np.any(np.abs(controls) > cfg.safety_max_voltage_v):
         raise ValueError("A rise voltage point exceeds safety_max_voltage_v")
+    # Segments are built from rounded sample counts but the analysis windows
+    # (positive_rise_windows) use the nominal times, so a fractional sample
+    # misaligns the U window against the U pulse -- refuse it.
+    durations = {"rise_time_s": cfg.rise_time_s, "pulse_width_s": cfg.pulse_width_s,
+                 "other_ramp_s": cfg.other_ramp_s, "pre_baseline_s": cfg.pre_baseline_s,
+                 "post_baseline_s": cfg.post_baseline_s, "gap1_s": cfg.gap1_s, "gap2_s": cfg.gap2_s}
+    fractional = {name: value for name, value in durations.items()
+                  if abs(value * cfg.sample_rate_hz - round(value * cfg.sample_rate_hz)) > 1e-6}
+    if fractional:
+        raise ValueError(f"Not a whole number of samples at {cfg.sample_rate_hz:g} Sa/s: {fractional} "
+                         "-- round them (multiples of 10 ns at 100 MSa/s)")
 
     # Flat-top amplitude is fixed at cfg.positive_amplitude_v, independent of
     # the arbitrary rise's own endpoint (controls[-1]), which is concatenated

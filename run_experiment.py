@@ -19,26 +19,31 @@ from waveform import rise_voltage
 
 
 def run_once(cfg: ExperimentConfig, sweep_label: str = "", sweep_overrides: dict | None = None,
-             repeat_index: int | None = None, block_on_finish: bool = True) -> bool:
+             repeat_index: int | None = None, block_on_finish: bool = True,
+             initial_warmup: bool = False) -> bool:
     """Returns True if the user clicked "Stop safely" on the control panel
     during this run (checked between iterations, never mid-measurement) --
     run_parameter_sweep.py uses this to stop the whole sweep rather than
-    launching another run."""
+    launching another run. initial_warmup: the first run since the program
+    started, so cfg.initial_warmup_repeats more warm-up rises come first."""
     save_run_config(cfg)
     append_run_log(cfg, sweep_label=sweep_label, sweep_overrides=sweep_overrides, repeat_index=repeat_index)
     optimizer = BayesianRiseOptimizer(cfg.waveform, cfg.bo)
     panel = ControlPanel(cfg)
     proposed_voltage = optimizer.propose()
     panel.show_next(proposed_voltage, "Initial linear rise")
-    if cfg.warmup_repeats > 0:
-        print(f"Applying linear warm-up rise {cfg.warmup_repeats} time(s) before measuring...")
-        for warmup in range(1, cfg.warmup_repeats + 1):
+    warmup_repeats = cfg.warmup_repeats + (cfg.initial_warmup_repeats if initial_warmup else 0)
+    if warmup_repeats > 0:
+        print(f"Applying linear warm-up rise {warmup_repeats} time(s) before measuring"
+              + (f" ({cfg.initial_warmup_repeats} start-of-program + {cfg.warmup_repeats})..."
+                 if initial_warmup else "..."))
+        for warmup in range(1, warmup_repeats + 1):
             measurement = panel.run_responsive(apply_rise_and_measure, proposed_voltage, cfg)
             if cfg.save_warmup:
                 save_warmup_measurement(measurement, warmup, cfg)
-            panel.set_status(f"Linear warm-up {warmup}/{cfg.warmup_repeats}")
+            panel.set_status(f"Linear warm-up {warmup}/{warmup_repeats}")
             if panel.stop_requested:
-                print(f"Stop requested -- ending during warm-up ({warmup}/{cfg.warmup_repeats}), "
+                print(f"Stop requested -- ending during warm-up ({warmup}/{warmup_repeats}), "
                       "before any measurement was saved.")
                 break
     planned = 0 if panel.stop_requested else cfg.bo.total_measurements
@@ -144,12 +149,12 @@ def confirm_top_protocols(cfg: ExperimentConfig, optimizer: BayesianRiseOptimize
     print(f"Confirmed best: candidate {int(best['candidate'])} (evaluation "
           f"{int(best['source_evaluation'])}), Work reduction {best['work_reduction_pct']:.1f} "
           f"+/- {100 * best['Work_NORM_sem']:.1f} % (mean +/- s.e.m.)"
-          + ("" if best["meets_target"] else " -- NONE reached the delta_P target on average"))
+          + ("" if best["meets_target"] else " -- NONE reached the delta_P target (within noise) on average"))
     print(f"Confirmation summary saved to {path}")
 
 
 def main() -> None:
-    run_once(ExperimentConfig())
+    run_once(ExperimentConfig(), initial_warmup=True)
 
 
 if __name__ == "__main__":

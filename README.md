@@ -42,14 +42,17 @@ P, U pulse = shaped rise (rise_time_s) -> flat top (+amplitude, pulse_width_s) -
    mixed with `initial_random_measurements` random shapes (`random_design="spread"`
    spans the whole voltage range).
 3. **BO phase:** `bo_steps` steps of Xopt constrained Expected Improvement,
-   feasible when ΔP ≥ target × (1 + `p_lower_relative_tolerance`).
+   constrained to ΔP ≥ target × (1 + `p_lower_relative_tolerance`), so proposals land above the target.
    - **Drift correction:** a linear reference rise is measured every
      `reference_interval` steps, and each row is normalized against the linear rises
      around it (`reference_window`).
    - **No feasible point yet:** extra random shapes are measured, up to
-     `max_extra_random_measurements`.
-4. **Confirmation:** the top `confirm_top` distinct feasible protocols are
-   re-measured `confirm_repeats` times, in shuffled order with one linear reference per round. They are ranked by
+     `max_extra_random_measurements`; if none meets the bound, it is lowered to the closest ΔP reached.
+4. **Confirmation:** the `confirm_top` lowest-Work distinct protocols with ΔP ≥ target
+   (the target itself; the tolerance above only steers BO), topped up if needed with those below the
+   target by at most `confirm_noise_sd` s.d. of the repeated linear rises' ΔP (measurement noise) that
+   need less Work than linear, closest first (`selected_by`), are re-measured `confirm_repeats` times
+   (a candidate counts if its mean ΔP ≥ target − the same noise allowance), in shuffled order with one linear reference per round. They are ranked by
    mean Work in `confirm_summary_*.csv`. This removes the low bias of a single noisy minimum.
 5. **Post-run outputs:** an evolution video and a PCA landscape plot (plus a Pareto plot in `"pareto"` mode).
 
@@ -61,7 +64,7 @@ P, U pulse = shaped rise (rise_time_s) -> flat top (+amplitude, pulse_width_s) -
 | `"pareto"` | Minimizes Work and maximizes ΔP together. |
 | `"explore"` | Maps the space without optimizing. |
 
-Default run: 150 warm-up + 315 BO-run + 41 confirmation measurements, about 40 min.
+Default run: 150 warm-up + 315 BO-run + 31 confirmation measurements, about 40 min.
 
 ## Install
 
@@ -106,7 +109,7 @@ Each script has its settings at the top; edit them, then run it.
 | `run_parameter_sweep.py` | Grid sweep. `SWEEP` maps dotted config paths (e.g. `"waveform.rise_time_s"`) to a value or a list/array of values. Every combination runs `REPEATS` times (repeats as the outer loop) into `<date>\SWEEP_NAME\`. Resume with `START_RUN`/`RESUME_FOLDER`. At the end it calls `summarize_sweep` and the convergence plot. |
 | `run_drift_test.py` | The same linear rise repeated in batches with growing rests, to track Work/ΔP drift and recovery (no BO). |
 | `run_drift_sweep.py` | Several drift tests back to back (`"drift.<field>"` keys allowed), with an output-off wait between them. |
-| `run_relaxation_test.py` | ΔP vs `gap1 = gap2` (reset→P = P→U), after the warm-up. `GAPS_S` (rounded to whole samples) × `ROUNDS`, shuffled per round, with the linear rise or `PROTOCOL_V`. Writes `relaxation_log_*.csv` and `relaxation_delta_p_vs_gap.png`; `--replot <log>` replots. |
+| `run_relaxation_test.py` | ΔP vs `gap1 = gap2` (reset→P = P→U) for each amplitude in `AMPLITUDES_V` (±flat top/reset). For each amplitude it runs its own warm-up, then `GAPS_S` (rounded to whole samples) × `ROUNDS`, shuffled per round, with the linear rise or `PROTOCOL_V`. Writes `relaxation_log_*.csv` and `relaxation_delta_p_vs_gap_{logx,logy,loglog}.png` (one curve per amplitude); `--replot <log>` replots. |
 
 Every BO run (single or in a sweep) appends one row to `D:\Ferroelectric_BTO_optimization\run_log.csv`.
 
@@ -128,6 +131,8 @@ Every BO run (single or in a sweep) appends one row to `D:\Ferroelectric_BTO_opt
 | --- | --- |
 | `plot_sweep_results.py --sweep-folder <folder> [--x … --series …]` | Best confirmed protocol per setting. Writes `sweep_all_runs.csv` and `sweep_best_per_setting.csv`. Plots: Work reduction vs x; absolute Work (log-log with power-law fit, written to `sweep_power_law_fit.csv`) and ΔP vs x; best-protocol V, I1−I2 and P(t) vs time and vs t/τ (20 ns cut at each window end). |
 | `plot_sweep_convergence.py` | Work ratio vs a swept `run_log.csv` column. |
+| `plot_sweep_figure.py --sweep-folder <folder> [--output-dir <folder>]` | Publication sweep figure plus the polynomial-coefficient distributions below. |
+| `plot_sweep_polynomial_coefficients.py --sweep-folder <folder> [--output-dir <folder>]` | One panel per power order, showing coefficient distributions across confirmed best protocols at each rise time. Exact Bernstein-to-power conversion: `V(s) = sum(a_k * s**k)`, `s = t/tau`; all `a_k` are in volts. Dots are independent runs; boxes show median and IQR, whiskers the full range. Saves PDF/SVG/PNG and per-run/summary CSV tables. |
 | `plot_history_traces.py`, `make_evolution_video.py` | All traces of one run, as static plots or video. |
 | `plot_landscape.py` | Work/ΔP on the top-2 principal components of `V0..Vn`. |
 | `plot_pareto.py` | Work vs ΔP with the measured Pareto front. |

@@ -31,7 +31,7 @@ class InstrumentConfig:
 
 @dataclass(frozen=True)
 class DeviceConfig:
-    device_name: str = "BTO_PLD219_2"
+    device_name: str = "BTO_PLD220_23"
     electrode_area_m2: float = (20e-6) ** 2
     current_preamplifier_gain_a_per_v: float = 1.0 / 50.0
     use_current_amplifier: bool = False
@@ -49,11 +49,11 @@ class PUNDWaveformConfig:
     sample_rate_hz: float = 10e7
     pulse_width_s: float = 2e-6
     rise_time_s: float = 1e-6  # tau: the BO-shaped P/U rise
-    other_ramp_time_s: float | None = 0.1e-6  # reset rise/fall and P/U falls; None = rise_time_s
+    other_ramp_time_s: float | None = 10e-9  # reset rise/fall and P/U falls; None = rise_time_s
     pre_baseline_s: float = 2e-6
     post_baseline_s: float = 2e-6
-    gap1_s: float = 1e-6
-    gap2_s: float = 1e-6
+    gap1_s: float = 0.2e-6
+    gap2_s: float = 0.2e-6
     # One amplitude for the whole PUND: the P/U flat top (+), the reset pulse
     # (-), and the end of the linear reference rise (+) -- see the properties
     # below. Must fully pole the device.
@@ -129,17 +129,23 @@ class BOConfig:
     random_design: str = "spread"
     # "optimize": while no row meets the delta_P constraint, Xopt cannot run
     # constrained EI, so BO measures extra random shapes (logged as "random
-    # initial", added on top of bo_steps) until one does. This many at most,
-    # then the run stops with an error.
+    # initial", added on top of bo_steps) until one does. This many at most;
+    # then the constraint is lowered to the closest delta_P reached and BO goes on.
     max_extra_random_measurements: int = 300
     bo_steps: int = 250
-    # "optimize": after the BO steps, re-measure the confirm_top best distinct
-    # feasible protocols confirm_repeats times each (one linear reference per
-    # round, candidates in shuffled order) and rank them by mean Work -- a
-    # single noisy measurement's minimum is biased low. Adds
+    # "optimize": after the BO steps, re-measure the confirm_top lowest-Work
+    # distinct protocols with delta_P >= target (the target itself, not the
+    # BO bound) confirm_repeats times each (one linear reference per round,
+    # candidates in shuffled order) and rank them by mean Work -- a single
+    # noisy measurement's minimum is biased low. Adds
     # confirm_repeats * (confirm_top + 1) + 1 measurements. 0 = skip.
-    confirm_top: int = 3
-    confirm_repeats: int = 10
+    confirm_top: int = 5
+    confirm_repeats: int = 5
+    # Too few protocols with delta_P >= target: the rest of confirm_top may
+    # come from those below it by at most this many standard deviations of
+    # the repeated linear rises' delta_P (the measurement noise), closest
+    # first, if they need less Work than linear. 0 = never below the target.
+    confirm_noise_sd: float = 2.0
     # Drift correction: one extra linear rise after every this many BO steps
     # (added on top of bo_steps); every row is then normalized against the
     # linear rises measured around it instead of the initial-phase mean.
@@ -147,8 +153,11 @@ class BOConfig:
     reference_interval: int = 10
     # Linear rises averaged into each point of the drift reference (centered, in time order)
     reference_window: int = 5
-    # "optimize": feasibility bound, "pareto": reference delta_P = target * (1 + this)
-    p_lower_relative_tolerance: float = 2e-3
+    # "optimize": BO's constraint is delta_P >= target * (1 + this), so its
+    # proposals land above the target with margin; which protocols count
+    # (confirmation candidates, "feasible") uses the target itself.
+    # "pareto": reference delta_P = target * (1 + this)
+    p_lower_relative_tolerance: float = 1e-3
     random_seed: int = field(default_factory=lambda: time.time_ns() % (2**32))
     n_restarts: int = 5
     max_iter: int = 100
@@ -168,6 +177,8 @@ class BOConfig:
             raise ValueError("max_extra_random_measurements must be >= 0")
         if self.confirm_top < 0 or self.confirm_repeats < 1:
             raise ValueError("confirm_top must be >= 0 and confirm_repeats >= 1")
+        if self.confirm_noise_sd < 0:
+            raise ValueError("confirm_noise_sd must be >= 0")
         if self.reference_interval < 0:
             raise ValueError("reference_interval must be >= 0 (0 = no drift correction)")
         if self.reference_window < 1:
@@ -200,6 +211,9 @@ class ExperimentConfig:
     output_on_wait_s: float = 0.05
     # Linear-rise repeats before measuring, to settle the device ("pareto" also uses them as reference)
     warmup_repeats: int = 150
+    # Extra linear-rise repeats once per program launch, before the first
+    # run's (or block's) warmup_repeats -- wakes up a device left undriven for days.
+    initial_warmup_repeats: int = 500
     # True: keep every warm-up measurement (trace/rise CSVs + a Work/delta_P
     # table) in the run folder's warmup/ subfolder, ~1.2 MB each.
     save_warmup: bool = True
