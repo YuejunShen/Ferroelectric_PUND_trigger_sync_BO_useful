@@ -127,12 +127,37 @@ Every BO run (single or in a sweep) appends one row to `D:\Ferroelectric_BTO_opt
 
 ## Analysis (no hardware needed)
 
+Optimal-protocol overlays prefer runs meeting the polarization target, then
+choose the largest confirmed work saving at each rise time. Across-run
+statistics retain all complete confirmed runs, including below-target runs;
+the source tables preserve target status and waveform statistics include
+the number of target-meeting runs per rise time.
+
+`plot_sweep_voltage_comparison.py --sweep-folder <folder> [--output-dir <folder>]`
+adds measured-versus-proposed overlays for the selected optimal protocols,
+signed residuals in mV, and across-run RMS differences (mean +/- sample SD).
+It averages measured confirmations within each run, excludes the first/last
+20 ns, and does not fit, align, or rescale either voltage. RMS, peak errors,
+and native-grid traces are exported as CSVs. `plot_sweep_figure.py` also
+generates this additional figure; its main voltage plots still default to
+the commanded Bernstein waveforms.
+
+For measured device-voltage shapes, pass `--voltage-source measured` to
+`plot_sweep_figure.py` or `plot_sweep_waveform_statistics.py`. This uses
+`rise_voltage_v` (scope voltage with the run's configured sense-resistor
+correction), averages confirmation traces within each run before computing
+across-run mean and sample standard deviation, and excludes 20 ns at each
+rise edge. Both optimal overlays and linear references are measured.
+The default remains `commanded`; polynomial coefficient/component figures
+always describe the commanded Bernstein protocols.
+
 | Script | Output |
 | --- | --- |
 | `plot_sweep_results.py --sweep-folder <folder> [--x … --series …]` | Best confirmed protocol per setting. Writes `sweep_all_runs.csv` and `sweep_best_per_setting.csv`. Plots: Work reduction vs x; absolute Work (log-log with power-law fit, written to `sweep_power_law_fit.csv`) and ΔP vs x; best-protocol V, I1−I2 and P(t) vs time and vs t/τ (20 ns cut at each window end). |
 | `plot_sweep_convergence.py` | Work ratio vs a swept `run_log.csv` column. |
-| `plot_sweep_figure.py --sweep-folder <folder> [--output-dir <folder>]` | Publication sweep figure plus the polynomial-coefficient distributions below. |
-| `plot_sweep_polynomial_coefficients.py --sweep-folder <folder> [--output-dir <folder>]` | One panel per power order, showing coefficient distributions across confirmed best protocols at each rise time. Exact Bernstein-to-power conversion: `V(s) = sum(a_k * s**k)`, `s = t/tau`; all `a_k` are in volts. Dots are independent runs; boxes show median and IQR, whiskers the full range. Saves PDF/SVG/PNG and per-run/summary CSV tables. |
+| `plot_sweep_waveform_statistics.py --sweep-folder <folder> [--output-dir <folder>]` | Mean commanded rise waveform +/- sample standard deviation across independent runs, with one panel per rise time, the same selected optimal protocol as figure a overlaid, and a comparison of mean shapes. Uses normalized time `s=t/tau`, evaluates saved Bernstein controls directly, and counts one confirmed best protocol per run. Saves PDF/SVG/PNG, pointwise statistics, and selected-protocol provenance CSVs. Also produced by `plot_sweep_figure.py`. |
+| `plot_sweep_figure.py --sweep-folder <folder> [--output-dir <folder>]` | Original six-panel publication sweep figure, plus the separate coefficient statistics and component figures below. |
+| `plot_sweep_polynomial_coefficients.py --sweep-folder <folder> [--output-dir <folder>]` | One panel per power order: mean +/- sample standard deviation across independent runs' confirmed best protocols, grouped by rise time, with linear coefficient axes. Exact Bernstein-to-power conversion: `V(s) = sum(a_k * s**k)`, `s = t/tau`; all `a_k` are in volts. Also plots the selected optimal rises from figure a above their signed polynomial-term bands, with absolute term-area shares `abs(a_k)/(k+1)` showing magnitude and cancellation. These shares are not electrical-work fractions. Saves PDF/SVG/PNG and per-run coefficients, summary statistics, component traces, and area CSV tables. |
 | `plot_history_traces.py`, `make_evolution_video.py` | All traces of one run, as static plots or video. |
 | `plot_landscape.py` | Work/ΔP on the top-2 principal components of `V0..Vn`. |
 | `plot_pareto.py` | Work vs ΔP with the measured Pareto front. |

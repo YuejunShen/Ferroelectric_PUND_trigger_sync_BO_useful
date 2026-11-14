@@ -125,7 +125,7 @@ def panel_period(ax_v, ax_i, trace, optimum_trace, timing, waveform, area_m2):
     handles, labels = ax_v.get_legend_handles_labels()
     ax_v.legend(handles[::-1], labels[::-1], loc="upper left", borderaxespad=0.2)
     amplitude = waveform.amplitude_v
-    reset_mid = (waveform.pre_baseline_s + waveform.other_ramp_s + waveform.pulse_width_s) * 1e6
+    reset_mid = (waveform.pre_baseline_s + waveform.other_ramp_s + waveform.reset_width_s / 2) * 1e6
     ax_v.text(reset_mid, -amplitude + 0.15, "Reset", ha="center", va="bottom")
     for start, name in ((timing.first_rise_start_s, "P"), (timing.second_rise_start_s, "U")):
         ax_v.text(start * 1e6 + tau_us + waveform.pulse_width_s * 0.5e6, amplitude - 0.15, name,

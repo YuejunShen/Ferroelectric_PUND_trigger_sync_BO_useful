@@ -54,7 +54,9 @@ def positive_rise_windows(waveform_cfg: dict):
     rise_time_s = waveform_cfg["rise_time_s"]
     # Absent (older runs) or None means every other ramp reused rise_time_s.
     other_ramp_s = waveform_cfg.get("other_ramp_time_s") or rise_time_s
-    reset_pulse_duration = 2.0 * pulse_width_s + 2.0 * other_ramp_s
+    # Absent (older runs) or None means the reset flat top was 2 * pulse_width_s.
+    reset_width_s = waveform_cfg.get("reset_pulse_width_s") or 2.0 * pulse_width_s
+    reset_pulse_duration = reset_width_s + 2.0 * other_ramp_s
     positive_pulse_duration = rise_time_s + pulse_width_s + other_ramp_s
     first_rise_start = waveform_cfg["pre_baseline_s"] + reset_pulse_duration + waveform_cfg["gap1_s"]
     second_rise_start = first_rise_start + positive_pulse_duration + waveform_cfg["gap2_s"]

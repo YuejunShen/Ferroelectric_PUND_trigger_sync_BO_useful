@@ -47,7 +47,10 @@ class DeviceConfig:
 @dataclass(frozen=True)
 class PUNDWaveformConfig:
     sample_rate_hz: float = 10e7
-    pulse_width_s: float = 2e-6
+    pulse_width_s: float = 2e-6  # P and U flat top (always identical)
+    # Reset (negative) pulse flat top, independent of the P/U width.
+    # None = 2 * pulse_width_s (the behaviour before this setting existed).
+    reset_pulse_width_s: float | None = 4e-6
     rise_time_s: float = 1e-6  # tau: the BO-shaped P/U rise
     other_ramp_time_s: float | None = 10e-9  # reset rise/fall and P/U falls; None = rise_time_s
     pre_baseline_s: float = 2e-6
@@ -60,7 +63,7 @@ class PUNDWaveformConfig:
     amplitude_v: float = 1.2
     rise_basis: str = "points"  # "points" (linear interpolation) or "bernstein" (polynomial)
     linear_minimum_voltage_v: float = 0.0
-    minimum_voltage_v: float = 0  # BO lower bound
+    minimum_voltage_v: float = -0.1  # BO lower bound
     maximum_voltage_v: float = 1.3  # BO upper bound
     safety_max_voltage_v: float = 2.0  # hard ceiling, independent of the BO search bounds
     maximum_arb_points: int = 1_000_000
@@ -72,6 +75,8 @@ class PUNDWaveformConfig:
             raise ValueError(f"Unknown rise_basis {self.rise_basis!r}")
         if self.other_ramp_time_s is not None and self.other_ramp_time_s <= 0.0:
             raise ValueError("other_ramp_time_s must be positive (or None to reuse rise_time_s)")
+        if self.reset_pulse_width_s is not None and self.reset_pulse_width_s <= 0.0:
+            raise ValueError("reset_pulse_width_s must be positive (or None for 2 * pulse_width_s)")
         allowed_max = max(self.linear_maximum_voltage_v, self.maximum_voltage_v)
         allowed_min = min(self.linear_minimum_voltage_v, self.minimum_voltage_v)
         if (allowed_max > self.safety_max_voltage_v
@@ -106,6 +111,11 @@ class PUNDWaveformConfig:
     def linear_maximum_voltage_v(self) -> float:
         """End of the linear reference rise, so it meets the flat top with no jump."""
         return self.amplitude_v
+
+    @property
+    def reset_width_s(self) -> float:
+        """Reset flat-top width actually used (reset_pulse_width_s, or 2 * pulse_width_s if None)."""
+        return 2.0 * self.pulse_width_s if self.reset_pulse_width_s is None else self.reset_pulse_width_s
 
     @property
     def other_ramp_s(self) -> float:

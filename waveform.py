@@ -102,7 +102,7 @@ def build_shaped_rise(control_voltages_v: np.ndarray, rise_time_s: float, sample
 def positive_rise_windows(cfg: PUNDWaveformConfig) -> PundTiming:
     """Offsets of each positive pulse's rise onset, relative to the AWG
     buffer restart (t=0 = start of pre_baseline_s)."""
-    reset_pulse_duration = 2.0 * cfg.pulse_width_s + 2.0 * cfg.other_ramp_s
+    reset_pulse_duration = cfg.reset_width_s + 2.0 * cfg.other_ramp_s
     positive_pulse_duration = cfg.rise_time_s + cfg.pulse_width_s + cfg.other_ramp_s
     first_rise_start = cfg.pre_baseline_s + reset_pulse_duration + cfg.gap1_s
     second_rise_start = first_rise_start + positive_pulse_duration + cfg.gap2_s
@@ -132,6 +132,7 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
     # (positive_rise_windows) use the nominal times, so a fractional sample
     # misaligns the U window against the U pulse -- refuse it.
     durations = {"rise_time_s": cfg.rise_time_s, "pulse_width_s": cfg.pulse_width_s,
+                 "reset_width_s": cfg.reset_width_s,
                  "other_ramp_s": cfg.other_ramp_s, "pre_baseline_s": cfg.pre_baseline_s,
                  "post_baseline_s": cfg.post_baseline_s, "gap1_s": cfg.gap1_s, "gap2_s": cfg.gap2_s}
     fractional = {name: value for name, value in durations.items()
@@ -150,7 +151,7 @@ def build_pund_waveform(control_voltages_v: np.ndarray, cfg: PUNDWaveformConfig)
     positive_pulse = np.concatenate((shaped_rise, flat_top, fall))
 
     reset_rise = _ramp(0.0, cfg.reset_voltage_v, cfg.other_ramp_s, cfg.sample_rate_hz)
-    reset_flat = _constant(cfg.reset_voltage_v, 2.0 * cfg.pulse_width_s, cfg.sample_rate_hz)
+    reset_flat = _constant(cfg.reset_voltage_v, cfg.reset_width_s, cfg.sample_rate_hz)
     reset_fall = _ramp(cfg.reset_voltage_v, 0.0, cfg.other_ramp_s, cfg.sample_rate_hz)
     reset_pulse = np.concatenate((reset_rise, reset_flat, reset_fall))
 

@@ -69,7 +69,7 @@ def panel_waveform(axis, config, history, best):
         t_us = np.arange(arb.voltage_v.size) / arb.sample_rate_hz * 1e6
         axis.plot(t_us, arb.voltage_v, color=color, linestyle=style, linewidth=0.9, label=label)
     amplitude = waveform.amplitude_v
-    reset_mid = (waveform.pre_baseline_s + waveform.other_ramp_s + waveform.pulse_width_s) * 1e6
+    reset_mid = (waveform.pre_baseline_s + waveform.other_ramp_s + waveform.reset_width_s / 2) * 1e6
     axis.text(reset_mid, -amplitude - 0.12, "Reset", ha="center", va="top")
     for start, name in ((timing.first_rise_start_s, "P"), (timing.second_rise_start_s, "U")):
         axis.text(start * 1e6 + rise_us + waveform.pulse_width_s * 0.5e6, amplitude + 0.08, name,
